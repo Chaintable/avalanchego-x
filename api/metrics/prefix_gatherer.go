@@ -8,7 +8,6 @@ import (
 	"fmt"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"google.golang.org/protobuf/proto"
 
 	"github.com/ava-labs/avalanchego/utils/metric"
 
@@ -64,12 +63,12 @@ func (g *prefixedGatherer) Gather() ([]*dto.MetricFamily, error) {
 	// Gather returns partially filled metrics in the case of an error. So, it
 	// is expected to still return the metrics in the case an error is returned.
 	metricFamilies, err := g.gatherer.Gather()
-	for _, metricFamily := range metricFamilies {
-		metricFamily.Name = proto.String(metric.AppendNamespace(
-			g.prefix,
-			metricFamily.GetName(),
-		))
-	}
+	// for _, metricFamily := range metricFamilies {
+	// 	metricFamily.Name = proto.String(metric.AppendNamespace(
+	// 		g.prefix,
+	// 		metricFamily.GetName(),
+	// 	))
+	// }
 	return metricFamilies, err
 }
 
