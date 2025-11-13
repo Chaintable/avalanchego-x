@@ -6,9 +6,10 @@ package metrics
 import (
 	"errors"
 	"fmt"
+	"strings"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/prometheus/client_golang/prometheus"
-	"google.golang.org/protobuf/proto"
 
 	"github.com/ava-labs/avalanchego/utils/metric"
 
@@ -65,6 +66,9 @@ func (g *prefixedGatherer) Gather() ([]*dto.MetricFamily, error) {
 	// is expected to still return the metrics in the case an error is returned.
 	metricFamilies, err := g.gatherer.Gather()
 	for _, metricFamily := range metricFamilies {
+		if strings.Contains(metricFamily.GetName(), "pipeline_") || strings.Contains(metricFamily.GetName(), "chain_") {
+			continue
+		}
 		metricFamily.Name = proto.String(metric.AppendNamespace(
 			g.prefix,
 			metricFamily.GetName(),
