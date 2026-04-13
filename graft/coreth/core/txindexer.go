@@ -84,7 +84,7 @@ func newTxIndexer(limit uint64, chain *BlockChain) *txIndexer {
 func (indexer *txIndexer) run(tail *uint64, head uint64, stop chan struct{}, done chan struct{}) {
 	start := time.Now()
 	defer func() {
-		txUnindexTimer.Inc(time.Since(start).Milliseconds())
+		txUnindexTimer.Update(time.Since(start))
 		close(done)
 	}()
 

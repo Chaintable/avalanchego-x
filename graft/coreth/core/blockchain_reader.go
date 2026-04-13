@@ -296,7 +296,9 @@ func (bc *BlockChain) Genesis() *types.Block {
 
 // GetVMConfig returns the block chain VM config.
 func (bc *BlockChain) GetVMConfig() *vm.Config {
-	return &bc.vmConfig
+	b := bc.vmConfig
+	b.Tracer = nil // We don't want to leak the tracer
+	return &b
 }
 
 // TrieDB retrieves the low level trie database used for data storage.
