@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package gossip
@@ -40,10 +40,8 @@ const (
 
 var (
 	_ Gossiper = (*ValidatorGossiper)(nil)
-	_ Gossiper = (*PullGossiper[*testTx])(nil)
-	_ Gossiper = (*NoOpGossiper)(nil)
-
-	_ Set[*testTx] = (*FullSet[*testTx])(nil)
+	_ Gossiper = (*PullGossiper[Gossipable])(nil)
+	_ Gossiper = (*PushGossiper[Gossipable])(nil)
 
 	ioTypeLabels   = []string{ioLabel, typeLabel}
 	sentPushLabels = prometheus.Labels{
@@ -79,6 +77,17 @@ var (
 	ErrInvalidRegossipFrequency = errors.New("re-gossip frequency cannot be negative")
 )
 
+// Gossipable is an item that can be gossiped across the network
+type Gossipable interface {
+	GossipID() ids.ID
+}
+
+// Marshaller handles parsing logic for a concrete Gossipable type
+type Marshaller[T Gossipable] interface {
+	MarshalGossip(T) ([]byte, error)
+	UnmarshalGossip([]byte) (T, error)
+}
+
 // Gossiper gossips Gossipables to other nodes
 type Gossiper interface {
 	// Gossip runs a cycle of gossip. Returns an error if we failed to gossip.
@@ -101,6 +110,7 @@ type Metrics struct {
 	tracking                *prometheus.GaugeVec
 	trackingLifetimeAverage prometheus.Gauge
 	topValidators           *prometheus.GaugeVec
+	bloomFilterHitRate      prometheus.Histogram
 }
 
 // NewMetrics returns a common set of metrics
@@ -109,10 +119,19 @@ func NewMetrics(
 	namespace string,
 ) (Metrics, error) {
 	m := Metrics{
+		bloomFilterHitRate: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Namespace: namespace,
+			Name:      "bloomfilter_hit_rate",
+			Help:      "Hit rate (%) of the bloom filter sent by pull gossip",
+			// Buckets are (-∞, 0], (0, 25%], (25%, 50%], (50%, 75%], (75%, ∞).
+			// 0% is placed into its own bucket so that useless bloom filters
+			// can be inspected individually.
+			Buckets: prometheus.LinearBuckets(0, 25, 4),
+		}),
 		count: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Namespace: namespace,
-				Name:      "gossip_count",
+				Name:      "count",
 				Help:      "amount of gossip (n)",
 			},
 			ioTypeLabels,
@@ -120,7 +139,7 @@ func NewMetrics(
 		bytes: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Namespace: namespace,
-				Name:      "gossip_bytes",
+				Name:      "bytes",
 				Help:      "amount of gossip (bytes)",
 			},
 			ioTypeLabels,
@@ -128,14 +147,14 @@ func NewMetrics(
 		tracking: prometheus.NewGaugeVec(
 			prometheus.GaugeOpts{
 				Namespace: namespace,
-				Name:      "gossip_tracking",
+				Name:      "tracking",
 				Help:      "number of gossipables being tracked",
 			},
 			typeLabels,
 		),
 		trackingLifetimeAverage: prometheus.NewGauge(prometheus.GaugeOpts{
 			Namespace: namespace,
-			Name:      "gossip_tracking_lifetime_average",
+			Name:      "tracking_lifetime_average",
 			Help:      "average duration a gossipable has been tracked (ns)",
 		}),
 		topValidators: prometheus.NewGaugeVec(
@@ -148,6 +167,7 @@ func NewMetrics(
 		),
 	}
 	err := errors.Join(
+		metrics.Register(m.bloomFilterHitRate),
 		metrics.Register(m.count),
 		metrics.Register(m.bytes),
 		metrics.Register(m.tracking),
@@ -184,7 +204,7 @@ func (v ValidatorGossiper) Gossip(ctx context.Context) error {
 func NewPullGossiper[T Gossipable](
 	log logging.Logger,
 	marshaller Marshaller[T],
-	set Set[T],
+	set PullGossiperSet[T],
 	client *p2p.Client,
 	metrics Metrics,
 	pollSize int,
@@ -199,17 +219,30 @@ func NewPullGossiper[T Gossipable](
 	}
 }
 
+// PullGossiperSet exposes the current bloom filter and allows adding new items
+// that were not included in the filter.
+//
+// TODO: Consider naming this interface based on what it provides rather than
+// how its used.
+type PullGossiperSet[T Gossipable] interface {
+	// Add adds a value to the set. Returns an error if v was not added.
+	Add(v T) error
+	// BloomFilter returns the bloom filter and its corresponding salt.
+	BloomFilter() (bloom *bloom.Filter, salt ids.ID)
+}
+
 type PullGossiper[T Gossipable] struct {
 	log        logging.Logger
 	marshaller Marshaller[T]
-	set        Set[T]
+	set        PullGossiperSet[T]
 	client     *p2p.Client
 	metrics    Metrics
 	pollSize   int
 }
 
 func (p *PullGossiper[_]) Gossip(ctx context.Context) error {
-	msgBytes, err := MarshalAppRequest(p.set.GetFilter())
+	bf, salt := p.set.BloomFilter()
+	msgBytes, err := MarshalAppRequest(bf.Marshal(), salt[:])
 	if err != nil {
 		return err
 	}
@@ -286,7 +319,7 @@ func (p *PullGossiper[_]) handleResponse(
 // NewPushGossiper returns an instance of PushGossiper
 func NewPushGossiper[T Gossipable](
 	marshaller Marshaller[T],
-	mempool Set[T],
+	set PushGossiperSet,
 	validators p2p.ValidatorSubset,
 	client *p2p.Client,
 	metrics Metrics,
@@ -313,7 +346,7 @@ func NewPushGossiper[T Gossipable](
 
 	return &PushGossiper[T]{
 		marshaller:           marshaller,
-		set:                  mempool,
+		set:                  set,
 		validators:           validators,
 		client:               client,
 		metrics:              metrics,
@@ -329,10 +362,19 @@ func NewPushGossiper[T Gossipable](
 	}, nil
 }
 
+// PushGossiperSet exposes whether hashes are still included in a set.
+//
+// TODO: Consider naming this interface based on what it provides rather than
+// how its used.
+type PushGossiperSet interface {
+	// Has returns true if the hash is in the set.
+	Has(h ids.ID) bool
+}
+
 // PushGossiper broadcasts gossip to peers randomly in the network
 type PushGossiper[T Gossipable] struct {
 	marshaller Marshaller[T]
-	set        Set[T]
+	set        PushGossiperSet
 	validators p2p.ValidatorSubset
 	client     *p2p.Client
 	metrics    Metrics
@@ -517,7 +559,7 @@ func (p *PushGossiper[T]) gossip(
 	)
 }
 
-// Add enqueues new gossipables to be pushed. If a gossiable is already tracked,
+// Add enqueues new gossipables to be pushed. If a gossipable is already tracked,
 // it is not added again.
 func (p *PushGossiper[T]) Add(gossipables ...T) {
 	var (
@@ -569,9 +611,13 @@ func (p *PushGossiper[_]) updateMetrics(nowUnixNano float64) {
 	p.metrics.trackingLifetimeAverage.Set(averageLifetime)
 }
 
-// Every calls [Gossip] every [frequency] amount of time.
-func Every(ctx context.Context, log logging.Logger, gossiper Gossiper, frequency time.Duration) {
-	ticker := time.NewTicker(frequency)
+// Every calls [Gossip] every [period] amount of time.
+func Every(ctx context.Context, log logging.Logger, gossiper Gossiper, period time.Duration) {
+	if period <= 0 {
+		period = defaultRequestPeriod
+	}
+
+	ticker := time.NewTicker(period)
 	defer ticker.Stop()
 
 	for {
@@ -585,38 +631,4 @@ func Every(ctx context.Context, log logging.Logger, gossiper Gossiper, frequency
 			return
 		}
 	}
-}
-
-type NoOpGossiper struct{}
-
-func (NoOpGossiper) Gossip(context.Context) error {
-	return nil
-}
-
-type TestGossiper struct {
-	GossipF func(ctx context.Context) error
-}
-
-func (t *TestGossiper) Gossip(ctx context.Context) error {
-	return t.GossipF(ctx)
-}
-
-type FullSet[T Gossipable] struct{}
-
-func (FullSet[_]) Gossip(context.Context) error {
-	return nil
-}
-
-func (FullSet[T]) Add(T) error {
-	return nil
-}
-
-func (FullSet[T]) Has(ids.ID) bool {
-	return true
-}
-
-func (FullSet[T]) Iterate(func(gossipable T) bool) {}
-
-func (FullSet[_]) GetFilter() ([]byte, []byte) {
-	return bloom.FullFilter.Marshal(), ids.Empty[:]
 }

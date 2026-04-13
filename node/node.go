@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package node
@@ -7,12 +7,14 @@ import (
 	"context"
 	"crypto"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"log"
+	"math"
 	"net"
 	"net/http"
 	"net/netip"
@@ -26,6 +28,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
+	"golang.org/x/exp/maps"
 
 	"github.com/ava-labs/avalanchego/api/admin"
 	"github.com/ava-labs/avalanchego/api/health"
@@ -37,6 +40,7 @@ import (
 	"github.com/ava-labs/avalanchego/config/node"
 	"github.com/ava-labs/avalanchego/database"
 	"github.com/ava-labs/avalanchego/database/leveldb"
+	"github.com/ava-labs/avalanchego/database/meterdb"
 	"github.com/ava-labs/avalanchego/database/pebbledb"
 	"github.com/ava-labs/avalanchego/database/prefixdb"
 	"github.com/ava-labs/avalanchego/genesis"
@@ -60,6 +64,8 @@ import (
 	"github.com/ava-labs/avalanchego/utils"
 	"github.com/ava-labs/avalanchego/utils/constants"
 	"github.com/ava-labs/avalanchego/utils/crypto/bls"
+	"github.com/ava-labs/avalanchego/utils/crypto/bls/signer/localsigner"
+	"github.com/ava-labs/avalanchego/utils/crypto/bls/signer/rpcsigner"
 	"github.com/ava-labs/avalanchego/utils/dynamicip"
 	"github.com/ava-labs/avalanchego/utils/filesystem"
 	"github.com/ava-labs/avalanchego/utils/hashing"
@@ -80,9 +86,9 @@ import (
 	"github.com/ava-labs/avalanchego/vms/rpcchainvm/runtime"
 
 	databasefactory "github.com/ava-labs/avalanchego/database/factory"
+	coreth "github.com/ava-labs/avalanchego/graft/coreth/plugin/factory"
 	avmconfig "github.com/ava-labs/avalanchego/vms/avm/config"
 	platformconfig "github.com/ava-labs/avalanchego/vms/platformvm/config"
-	coreth "github.com/ava-labs/coreth/plugin/evm"
 )
 
 const (
@@ -103,6 +109,7 @@ const (
 	responsesNamespace       = constants.PlatformName + metric.NamespaceSeparator + "responses"
 	rpcchainvmNamespace      = constants.PlatformName + metric.NamespaceSeparator + "rpcchainvm"
 	systemResourcesNamespace = constants.PlatformName + metric.NamespaceSeparator + "system_resources"
+	upgradeNamespace         = constants.PlatformName + metric.NamespaceSeparator + "upgrade"
 )
 
 var (
@@ -111,8 +118,12 @@ var (
 
 	indexerDBPrefix = []byte{0x00}
 
-	errInvalidTLSKey = errors.New("invalid TLS key")
-	errShuttingDown  = errors.New("server shutting down")
+	errInvalidTLSKey        = errors.New("invalid TLS key")
+	errShuttingDown         = errors.New("server shutting down")
+	errNoValidators         = errors.New("no validators in the current validator set")
+	errUpgradeNeeded        = errors.New("unknown network upgrade detected")
+	errUpgradeWithinTheDay  = errors.New("unknown network upgrade detected - update as soon as possible")
+	errUpgradeWithinTheHour = errors.New("imminent network upgrade detected - update immediately")
 )
 
 // New returns an instance of Node
@@ -136,13 +147,18 @@ func New(
 		Config:           config,
 	}
 
-	pop, err := signer.NewProofOfPossession(n.Config.StakingSigningKey)
+	n.StakingSigner, err = newStakingSigner(config.StakingSignerConfig)
+	if err != nil {
+		return nil, fmt.Errorf("problem initializing staking signer: %w", err)
+	}
+
+	pop, err := signer.NewProofOfPossession(n.StakingSigner)
 	if err != nil {
 		return nil, fmt.Errorf("problem creating proof of possession: %w", err)
 	}
 
 	logger.Info("initializing node",
-		zap.Stringer("version", version.CurrentApp),
+		zap.Stringer("version", version.Current),
 		zap.String("commit", version.GitCommit),
 		zap.Stringer("nodeID", n.ID),
 		zap.Stringer("stakingKeyType", tlsCert.PublicKeyAlgorithm),
@@ -286,6 +302,7 @@ type Node struct {
 
 	StakingTLSSigner crypto.Signer
 	StakingTLSCert   *staking.Certificate
+	StakingSigner    bls.Signer
 
 	// Storage for this node
 	DB database.Database
@@ -546,19 +563,11 @@ func (n *Node) initNetworking(reg prometheus.Registerer) error {
 	}
 
 	// Configure benchlist
-	n.Config.BenchlistConfig.Validators = n.vdrs
-	n.Config.BenchlistConfig.Benchable = n.chainRouter
-	n.Config.BenchlistConfig.BenchlistRegisterer = metrics.NewLabelGatherer(chains.ChainLabel)
-
-	err = n.MetricsGatherer.Register(
-		benchlistNamespace,
-		n.Config.BenchlistConfig.BenchlistRegisterer,
-	)
-	if err != nil {
+	benchlistReg := metrics.NewLabelGatherer(chains.ChainLabel)
+	if err := n.MetricsGatherer.Register(benchlistNamespace, benchlistReg); err != nil {
 		return err
 	}
-
-	n.benchlistManager = benchlist.NewManager(&n.Config.BenchlistConfig)
+	n.benchlistManager = benchlist.NewManager(n.chainRouter, n.vdrs, benchlistReg, n.Config.BenchlistConfig)
 
 	n.uptimeCalculator = uptime.NewLockedCalculator()
 
@@ -573,7 +582,7 @@ func (n *Node) initNetworking(reg prometheus.Registerer) error {
 		err := n.vdrs.AddStaker(
 			constants.PrimaryNetworkID,
 			n.ID,
-			n.Config.StakingSigningKey.PublicKey(),
+			n.StakingSigner.PublicKey(),
 			dummyTxID,
 			n.Config.SybilProtectionDisabledWeight,
 		)
@@ -612,7 +621,7 @@ func (n *Node) initNetworking(reg prometheus.Registerer) error {
 	n.Config.NetworkConfig.Beacons = n.bootstrappers
 	n.Config.NetworkConfig.TLSConfig = tlsConfig
 	n.Config.NetworkConfig.TLSKey = tlsKey
-	n.Config.NetworkConfig.BLSKey = n.Config.StakingSigningKey
+	n.Config.NetworkConfig.BLSKey = n.StakingSigner
 	n.Config.NetworkConfig.TrackedSubnets = n.Config.TrackedSubnets
 	n.Config.NetworkConfig.UptimeCalculator = n.uptimeCalculator
 	n.Config.NetworkConfig.UptimeRequirement = n.Config.UptimeRequirement
@@ -622,7 +631,7 @@ func (n *Node) initNetworking(reg prometheus.Registerer) error {
 
 	n.Net, err = network.NewNetwork(
 		&n.Config.NetworkConfig,
-		n.Config.UpgradeConfig.FortunaTime,
+		n.Config.UpgradeConfig.GraniteTime,
 		n.msgCreator,
 		reg,
 		n.Log,
@@ -677,7 +686,7 @@ func (n *Node) Dispatch() error {
 			)
 		}
 		// If the API server isn't running, shut down the node.
-		// If node is already shutting down, this does not tigger shutdown again,
+		// If node is already shutting down, this does not trigger shutdown again,
 		// and blocks until Shutdown returns.
 		n.Shutdown(1)
 	})
@@ -715,7 +724,7 @@ func (n *Node) Dispatch() error {
 	retErr := n.Net.Dispatch()
 
 	// If the P2P server isn't running, shut down the node.
-	// If node is already shutting down, this does not tigger shutdown again,
+	// If node is already shutting down, this does not trigger shutdown again,
 	// and blocks until Shutdown returns.
 	n.Shutdown(1)
 
@@ -753,7 +762,7 @@ func (n *Node) initDatabase() error {
 	case leveldb.Name:
 		// Prior to v1.10.15, the only on-disk database was leveldb, and its
 		// files went to [dbPath]/[networkID]/v1.4.5.
-		dbFolderName = version.CurrentDatabase.String()
+		dbFolderName = version.CurrentDatabase
 	case pebbledb.Name:
 		dbFolderName = "pebble"
 	default:
@@ -762,19 +771,37 @@ func (n *Node) initDatabase() error {
 	// dbFolderName is appended to the database path given in the config
 	dbFullPath := filepath.Join(n.Config.DatabaseConfig.Path, dbFolderName)
 
-	var err error
-	n.DB, err = databasefactory.New(
+	dbReg, err := metrics.MakeAndRegister(
+		n.MetricsGatherer,
+		dbNamespace,
+	)
+	if err != nil {
+		return err
+	}
+
+	db, err := databasefactory.New(
 		n.Config.DatabaseConfig.Name,
 		dbFullPath,
 		n.Config.DatabaseConfig.ReadOnly,
 		n.Config.DatabaseConfig.Config,
-		n.MetricsGatherer,
+		dbReg,
 		n.Log,
-		dbNamespace,
-		"all",
 	)
 	if err != nil {
 		return fmt.Errorf("couldn't create database: %w", err)
+	}
+
+	meterDBReg, err := metrics.MakeAndRegister(
+		n.MeterDBMetricsGatherer,
+		"all",
+	)
+	if err != nil {
+		return err
+	}
+
+	n.DB, err = meterdb.New(meterDBReg, db)
+	if err != nil {
+		return err
 	}
 
 	rawExpectedGenesisHash := hashing.ComputeHash256(n.Config.GenesisBytes)
@@ -1102,7 +1129,7 @@ func (n *Node) initChainManager(avaxAssetID ids.ID) error {
 			SybilProtectionEnabled:                  n.Config.SybilProtectionEnabled,
 			StakingTLSSigner:                        n.StakingTLSSigner,
 			StakingTLSCert:                          n.StakingTLSCert,
-			StakingBLSKey:                           n.Config.StakingSigningKey,
+			StakingBLSKey:                           n.StakingSigner,
 			Log:                                     n.Log,
 			LogFactory:                              n.LogFactory,
 			VMManager:                               n.VMManager,
@@ -1129,6 +1156,7 @@ func (n *Node) initChainManager(avaxAssetID ids.ID) error {
 			MeterVMEnabled:                          n.Config.MeterVMEnabled,
 			Metrics:                                 n.MetricsGatherer,
 			MeterDBMetrics:                          n.MeterDBMetricsGatherer,
+			ProposerMinBlockDelay:                   n.Config.ProposerMinBlockDelay,
 			SubnetConfigs:                           n.Config.SubnetConfigs,
 			ChainConfigs:                            n.Config.ChainConfigs,
 			FrontierPollFrequency:                   n.Config.FrontierPollFrequency,
@@ -1236,7 +1264,7 @@ func (n *Node) initVMs() error {
 	return err
 }
 
-// initSharedMemory initializes the shared memory for cross chain interation
+// initSharedMemory initializes the shared memory for cross chain interaction
 func (n *Node) initSharedMemory() {
 	n.Log.Info("initializing SharedMemory")
 	sharedMemoryDB := prefixdb.New([]byte("shared memory"), n.DB)
@@ -1370,14 +1398,14 @@ func (n *Node) initInfoAPI() error {
 
 	n.Log.Info("initializing info API")
 
-	pop, err := signer.NewProofOfPossession(n.Config.StakingSigningKey)
+	pop, err := signer.NewProofOfPossession(n.StakingSigner)
 	if err != nil {
 		return fmt.Errorf("problem creating proof of possession: %w", err)
 	}
 
 	service, err := info.NewService(
 		info.Parameters{
-			Version:   version.CurrentApp,
+			Version:   version.Current,
 			NodeID:    n.ID,
 			NodePOP:   pop,
 			NetworkID: n.Config.NetworkID,
@@ -1448,20 +1476,25 @@ func (n *Node) initHealthAPI() error {
 		// if there is too little disk space remaining, first report unhealthy and then shutdown the node
 
 		availableDiskBytes := n.resourceTracker.DiskTracker().AvailableDiskBytes()
+		availableDiskPercentage := n.resourceTracker.DiskTracker().AvailableDiskPercentage()
 
 		var err error
-		if availableDiskBytes < n.Config.RequiredAvailableDiskSpace {
+
+		if availableDiskPercentage < n.Config.RequiredAvailableDiskSpacePercentage {
 			n.Log.Fatal("low on disk space. Shutting down...",
-				zap.Uint64("remainingDiskBytes", availableDiskBytes),
+				zap.Uint64("availableDiskBytes", availableDiskBytes),
+				zap.Uint64("remainingDiskPercentage", availableDiskPercentage),
+				zap.Uint64("requiredDiskPercentage", n.Config.RequiredAvailableDiskSpacePercentage),
 			)
 			go n.Shutdown(1)
-			err = fmt.Errorf("remaining available disk space (%d) is below minimum required available space (%d)", availableDiskBytes, n.Config.RequiredAvailableDiskSpace)
-		} else if availableDiskBytes < n.Config.WarningThresholdAvailableDiskSpace {
-			err = fmt.Errorf("remaining available disk space (%d) is below the warning threshold of disk space (%d)", availableDiskBytes, n.Config.WarningThresholdAvailableDiskSpace)
+			err = fmt.Errorf("remaining available disk space percentage (%d%%) is below minimum required available space percentage (%d%%)", availableDiskPercentage, n.Config.RequiredAvailableDiskSpacePercentage)
+		} else if availableDiskPercentage < n.Config.WarningAvailableDiskSpacePercentage {
+			err = fmt.Errorf("remaining available disk space percentage (%d%%) is below warning threshold available space percentage (%d%%)", availableDiskPercentage, n.Config.WarningAvailableDiskSpacePercentage)
 		}
 
 		return map[string]interface{}{
-			"availableDiskBytes": availableDiskBytes,
+			"availableDiskBytes":      availableDiskBytes,
+			"availableDiskPercentage": availableDiskPercentage,
 		}, err
 	})
 
@@ -1481,7 +1514,7 @@ func (n *Node) initHealthAPI() error {
 			return "validator doesn't have a BLS key", nil
 		}
 
-		nodePK := n.Config.StakingSigningKey.PublicKey()
+		nodePK := n.StakingSigner.PublicKey()
 		if nodePK.Equals(vdrPK) {
 			return "node has the correct BLS key", nil
 		}
@@ -1494,6 +1527,126 @@ func (n *Node) initHealthAPI() error {
 	err = n.health.RegisterHealthCheck("bls", wrongBLSKeyCheck, health.ApplicationTag)
 	if err != nil {
 		return fmt.Errorf("couldn't register bls health check: %w", err)
+	}
+
+	upgradeReg, err := metrics.MakeAndRegister(
+		n.MetricsGatherer,
+		upgradeNamespace,
+	)
+	if err != nil {
+		return fmt.Errorf("couldn't create upgrade metrics register: %w", err)
+	}
+
+	timeUntilUpgradeMetric := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "time_until",
+		Help: "Time until an upcoming network upgrade (ns). +Inf means the upgrade is unscheduled.",
+	})
+	infinity := math.Inf(1)
+	timeUntilUpgradeMetric.Set(infinity)
+	if err := upgradeReg.Register(timeUntilUpgradeMetric); err != nil {
+		return fmt.Errorf("couldn't register time until upgrade metric: %w", err)
+	}
+
+	// TODO: This healthcheck calls both n.vdrs.GetMap and n.Net.PeerInfo which
+	// are expensive calls. This could be rewritten as an event based monitor to
+	// avoid expensive iteration.
+	var (
+		localUpgradeTime     = n.Config.UpgradeConfig.GraniteTime
+		localUpgradeTimeUnix = uint64(localUpgradeTime.Unix())
+		lastLogTime          time.Time
+	)
+	futureUpgradeCheck := health.CheckerFunc(func(context.Context) (interface{}, error) {
+		var (
+			currentValidators = n.vdrs.GetMap(constants.PrimaryNetworkID)
+			totalWeight       uint64
+		)
+		for _, vdr := range currentValidators {
+			totalWeight += vdr.Weight
+		}
+		if totalWeight == 0 {
+			return nil, errNoValidators
+		}
+
+		var (
+			peers               = n.Net.PeerInfo(maps.Keys(currentValidators))
+			upgradeTimes        = make(map[uint64]uint64) // upgrade time -> stake weight
+			modeUpgradeTimeUnix uint64
+			modeUpgradeWeight   uint64
+		)
+		for _, peer := range peers {
+			vdr := currentValidators[peer.ID]
+			upgradeWeight := upgradeTimes[peer.UpgradeTime]
+			upgradeWeight += vdr.Weight
+			upgradeTimes[peer.UpgradeTime] = upgradeWeight
+
+			if upgradeWeight > modeUpgradeWeight {
+				modeUpgradeTimeUnix = peer.UpgradeTime
+				modeUpgradeWeight = upgradeWeight
+			}
+		}
+
+		modeUpgradeWeightPortion := float64(modeUpgradeWeight) / float64(totalWeight)
+		result := map[string]interface{}{
+			"localUpgradeTime":            localUpgradeTime,
+			"modeUpgradeTime":             time.Unix(int64(modeUpgradeTimeUnix), 0).UTC(),
+			"modeUpgradeWeightPercentage": 100 * modeUpgradeWeightPortion,
+			"numUpgradeTimes":             len(upgradeTimes),
+		}
+		if localUpgradeTimeUnix >= modeUpgradeTimeUnix || modeUpgradeWeightPortion < .5 {
+			timeUntilUpgradeMetric.Set(infinity)
+			return result, nil
+		}
+
+		const (
+			day  = 24 * time.Hour
+			week = 7 * day
+		)
+		modeUpgradeTime := time.Unix(int64(modeUpgradeTimeUnix), 0)
+		timeUntilUpgrade := time.Until(modeUpgradeTime)
+		timeUntilUpgradeMetric.Set(float64(timeUntilUpgrade))
+		result["timeUntilUpgrade"] = timeUntilUpgrade.String()
+
+		var (
+			logFrequency time.Duration
+			log          func(msg string, fields ...zap.Field)
+			err          error
+		)
+		switch {
+		case timeUntilUpgrade > week:
+			logFrequency = 12 * time.Hour
+			log = n.Log.Info
+		case timeUntilUpgrade > 3*day:
+			logFrequency = 12 * time.Hour
+			log = n.Log.Warn
+		case timeUntilUpgrade > day:
+			logFrequency = time.Hour
+			log = n.Log.Warn
+			err = errUpgradeNeeded
+		case timeUntilUpgrade > time.Hour:
+			logFrequency = time.Hour
+			log = n.Log.Error
+			err = errUpgradeWithinTheDay
+		default:
+			logFrequency = 0 // log at the rate of the health check
+			log = n.Log.Error
+			err = errUpgradeWithinTheHour
+		}
+
+		if time.Since(lastLogTime) >= logFrequency {
+			log("unknown upgrade detected - this node should be updated to a compatible version",
+				zap.String("latestReleaseURL", "https://github.com/ava-labs/avalanchego/releases/latest"),
+				zap.Time("upgradeTime", modeUpgradeTime),
+				zap.Duration("timeUntilUpgrade", timeUntilUpgrade),
+				zap.Error(err),
+			)
+			lastLogTime = time.Now()
+		}
+		return result, err
+	})
+
+	err = n.health.RegisterHealthCheck("futureupgrade", futureUpgradeCheck, health.ApplicationTag)
+	if err != nil {
+		return fmt.Errorf("couldn't register future upgrade health check: %w", err)
 	}
 
 	handler, err := health.NewGetAndPostHandler(n.Log, n.health)
@@ -1643,6 +1796,50 @@ func (n *Node) initDiskTargeter(
 	)
 }
 
+// newStakingSigner returns a BLS signer based on the provided validated configuration.
+func newStakingSigner(cfg node.StakingSignerConfig) (bls.Signer, error) {
+	if cfg.EphemeralSignerEnabled {
+		signer, err := localsigner.New()
+		if err != nil {
+			return nil, fmt.Errorf("could not generate ephemeral signer: %w", err)
+		}
+
+		return signer, nil
+	}
+
+	if cfg.KeyContent != "" {
+		signerKeyContent, err := base64.StdEncoding.DecodeString(cfg.KeyContent)
+		if err != nil {
+			return nil, fmt.Errorf("unable to decode base64 content: %w", err)
+		}
+
+		signer, err := localsigner.FromBytes(signerKeyContent)
+		if err != nil {
+			return nil, fmt.Errorf("could not parse signing key: %w", err)
+		}
+
+		return signer, nil
+	}
+
+	if cfg.RPCEndpoint != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		signer, err := rpcsigner.NewClient(ctx, cfg.RPCEndpoint)
+		if err != nil {
+			return nil, fmt.Errorf("could not create rpc signer client: %w", err)
+		}
+
+		return signer, nil
+	}
+
+	if cfg.KeyPathIsSet {
+		return localsigner.FromFile(cfg.KeyPath)
+	}
+
+	return localsigner.FromFileOrPersistNew(cfg.KeyPath)
+}
+
 // Shutdown this node
 // May be called multiple times
 // All calls to shutdownOnce.Do block until the first call returns
@@ -1676,12 +1873,20 @@ func (n *Node) shutdown() {
 		time.Sleep(n.Config.ShutdownWait)
 	}
 
+	if n.StakingSigner != nil {
+		if err := n.StakingSigner.Shutdown(); err != nil {
+			n.Log.Debug("error during staking signer shutdown", zap.Error(err))
+		}
+	}
 	if n.resourceManager != nil {
 		n.resourceManager.Shutdown()
 	}
 	n.timeoutManager.Stop()
 	if n.chainManager != nil {
 		n.chainManager.Shutdown()
+	}
+	if n.benchlistManager != nil {
+		n.benchlistManager.Shutdown()
 	}
 	if n.profiler != nil {
 		n.profiler.Shutdown()

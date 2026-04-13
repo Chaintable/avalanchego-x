@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package executor
@@ -10,7 +10,6 @@ import (
 
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/snow/consensus/snowman"
-	"github.com/ava-labs/avalanchego/snow/engine/common"
 	"github.com/ava-labs/avalanchego/utils/set"
 	"github.com/ava-labs/avalanchego/vms/platformvm/block"
 	"github.com/ava-labs/avalanchego/vms/platformvm/metrics"
@@ -18,8 +17,10 @@ import (
 	"github.com/ava-labs/avalanchego/vms/platformvm/txs"
 	"github.com/ava-labs/avalanchego/vms/platformvm/txs/executor"
 	"github.com/ava-labs/avalanchego/vms/platformvm/txs/fee"
+	"github.com/ava-labs/avalanchego/vms/platformvm/txs/mempool"
 	"github.com/ava-labs/avalanchego/vms/platformvm/validators"
-	"github.com/ava-labs/avalanchego/vms/txs/mempool"
+
+	snowmanblock "github.com/ava-labs/avalanchego/snow/engine/snowman/block"
 )
 
 var (
@@ -35,7 +36,7 @@ type Manager interface {
 	// Returns the ID of the most recently accepted block.
 	LastAccepted() ids.ID
 
-	SetPreference(blkID ids.ID) (updated bool)
+	SetPreference(blkID ids.ID, blockCtx *snowmanblock.Context)
 	Preferred() ids.ID
 
 	GetBlock(blkID ids.ID) (snowman.Block, error)
@@ -52,12 +53,11 @@ type Manager interface {
 }
 
 func NewManager(
-	mempool mempool.Mempool[*txs.Tx],
-	toEngine chan<- common.Message,
+	mempool *mempool.Mempool,
 	metrics metrics.Metrics,
-	s state.State,
+	s *state.State,
 	txExecutorBackend *executor.Backend,
-	validatorManager validators.Manager,
+	validatorManager *validators.Manager,
 ) Manager {
 	lastAccepted := s.GetLastAccepted()
 	backend := &backend{
@@ -77,7 +77,6 @@ func NewManager(
 		},
 		rejector: &rejector{
 			backend:         backend,
-			toEngine:        toEngine,
 			addTxsToMempool: !txExecutorBackend.Config.PartialSyncPrimaryNetwork,
 		},
 		preferred:         lastAccepted,
@@ -91,6 +90,7 @@ type manager struct {
 	rejector block.Visitor
 
 	preferred         ids.ID
+	preferredCtx      *snowmanblock.Context
 	txExecutorBackend *executor.Backend
 }
 
@@ -113,10 +113,9 @@ func (m *manager) NewBlock(blk block.Block) snowman.Block {
 	}
 }
 
-func (m *manager) SetPreference(blkID ids.ID) bool {
-	updated := m.preferred != blkID
+func (m *manager) SetPreference(blkID ids.ID, blockCtx *snowmanblock.Context) {
 	m.preferred = blkID
-	return updated
+	m.preferredCtx = blockCtx
 }
 
 func (m *manager) Preferred() ids.ID {
@@ -137,9 +136,17 @@ func (m *manager) VerifyTx(tx *txs.Tx) error {
 		}
 	}
 
-	recommendedPChainHeight, err := m.ctx.ValidatorState.GetMinimumHeight(context.TODO())
-	if err != nil {
-		return fmt.Errorf("failed to fetch P-chain height: %w", err)
+	var (
+		recommendedPChainHeight uint64
+		err                     error
+	)
+	if m.preferredCtx != nil {
+		recommendedPChainHeight = m.preferredCtx.PChainHeight
+	} else {
+		recommendedPChainHeight, err = m.ctx.ValidatorState.GetMinimumHeight(context.TODO())
+		if err != nil {
+			return fmt.Errorf("failed to fetch P-chain height: %w", err)
+		}
 	}
 	err = executor.VerifyWarpMessages(
 		context.TODO(),
@@ -152,7 +159,10 @@ func (m *manager) VerifyTx(tx *txs.Tx) error {
 		return fmt.Errorf("failed verifying warp messages: %w", err)
 	}
 
-	stateDiff, err := state.NewDiff(m.preferred, m)
+	isAddingStakerAfterDeletionAllowed := state.StakerAdditionAfterDeletionLegality(
+		m.txExecutorBackend.Config.UpgradeConfig.IsHeliconActivated(m.txExecutorBackend.Clk.Time()),
+	)
+	stateDiff, err := state.NewDiff(m.preferred, m, isAddingStakerAfterDeletionAllowed)
 	if err != nil {
 		return fmt.Errorf("failed creating state diff: %w", err)
 	}

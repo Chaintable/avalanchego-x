@@ -1,10 +1,9 @@
-// Copyright (C) 2019-2024, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package avm
 
 import (
-	"context"
 	"math"
 	"testing"
 
@@ -37,15 +36,14 @@ func TestInvalidGenesis(t *testing.T) {
 	defer ctx.Lock.Unlock()
 
 	err := vm.Initialize(
-		context.Background(),
-		ctx,                          // context
-		memdb.New(),                  // database
-		nil,                          // genesisState
-		nil,                          // upgradeBytes
-		nil,                          // configBytes
-		make(chan common.Message, 1), // engineMessenger
-		nil,                          // fxs
-		nil,                          // AppSender
+		t.Context(),
+		ctx,         // context
+		memdb.New(), // database
+		nil,         // genesisState
+		nil,         // upgradeBytes
+		nil,         // configBytes
+		nil,         // fxs
+		nil,         // AppSender
 	)
 	require.ErrorIs(err, codec.ErrCantUnpackVersion)
 }
@@ -57,19 +55,18 @@ func TestInvalidFx(t *testing.T) {
 	ctx := snowtest.Context(t, snowtest.XChainID)
 	ctx.Lock.Lock()
 	defer func() {
-		require.NoError(vm.Shutdown(context.Background()))
+		require.NoError(vm.Shutdown(t.Context()))
 		ctx.Lock.Unlock()
 	}()
 
 	genesisBytes := newGenesisBytesTest(t)
 	err := vm.Initialize(
-		context.Background(),
-		ctx,                          // context
-		memdb.New(),                  // database
-		genesisBytes,                 // genesisState
-		nil,                          // upgradeBytes
-		nil,                          // configBytes
-		make(chan common.Message, 1), // engineMessenger
+		t.Context(),
+		ctx,          // context
+		memdb.New(),  // database
+		genesisBytes, // genesisState
+		nil,          // upgradeBytes
+		nil,          // configBytes
 		[]*common.Fx{ // fxs
 			nil,
 		},
@@ -85,19 +82,18 @@ func TestFxInitializationFailure(t *testing.T) {
 	ctx := snowtest.Context(t, snowtest.XChainID)
 	ctx.Lock.Lock()
 	defer func() {
-		require.NoError(vm.Shutdown(context.Background()))
+		require.NoError(vm.Shutdown(t.Context()))
 		ctx.Lock.Unlock()
 	}()
 
 	genesisBytes := newGenesisBytesTest(t)
 	err := vm.Initialize(
-		context.Background(),
-		ctx,                          // context
-		memdb.New(),                  // database
-		genesisBytes,                 // genesisState
-		nil,                          // upgradeBytes
-		nil,                          // configBytes
-		make(chan common.Message, 1), // engineMessenger
+		t.Context(),
+		ctx,          // context
+		memdb.New(),  // database
+		genesisBytes, // genesisState
+		nil,          // upgradeBytes
+		nil,          // configBytes
 		[]*common.Fx{{ // fxs
 			ID: ids.Empty,
 			Fx: &FxTest{
@@ -120,7 +116,7 @@ func TestIssueTx(t *testing.T) {
 	env.vm.ctx.Lock.Unlock()
 
 	tx := newTx(t, env.genesisBytes, env.vm.ctx.ChainID, env.vm.parser, "AVAX")
-	issueAndAccept(require, env.vm, env.issuer, tx)
+	issueAndAccept(require, env.vm, tx)
 }
 
 // Test issuing a transaction that creates an NFT family
@@ -159,7 +155,7 @@ func TestIssueNFT(t *testing.T) {
 		key.Address(),
 	)
 	require.NoError(err)
-	issueAndAccept(require, env.vm, env.issuer, createAssetTx)
+	issueAndAccept(require, env.vm, createAssetTx)
 
 	// Mint the NFT
 	mintNFTTx, err := env.txBuilder.MintNFT(
@@ -173,7 +169,7 @@ func TestIssueNFT(t *testing.T) {
 		key.Address(),
 	)
 	require.NoError(err)
-	issueAndAccept(require, env.vm, env.issuer, mintNFTTx)
+	issueAndAccept(require, env.vm, mintNFTTx)
 
 	// Move the NFT
 	utxos, err := avax.GetAllUTXOs(env.vm.state, kc.Addresses())
@@ -193,7 +189,7 @@ func TestIssueNFT(t *testing.T) {
 		key.Address(),
 	)
 	require.NoError(err)
-	issueAndAccept(require, env.vm, env.issuer, transferNFTTx)
+	issueAndAccept(require, env.vm, transferNFTTx)
 }
 
 // Test issuing a transaction that creates an Property family
@@ -235,7 +231,7 @@ func TestIssueProperty(t *testing.T) {
 		key.Address(),
 	)
 	require.NoError(err)
-	issueAndAccept(require, env.vm, env.issuer, createAssetTx)
+	issueAndAccept(require, env.vm, createAssetTx)
 
 	// mint the property
 	mintPropertyOp := &txs.Operation{
@@ -264,7 +260,7 @@ func TestIssueProperty(t *testing.T) {
 		key.Address(),
 	)
 	require.NoError(err)
-	issueAndAccept(require, env.vm, env.issuer, mintPropertyTx)
+	issueAndAccept(require, env.vm, mintPropertyTx)
 
 	// burn the property
 	burnPropertyOp := &txs.Operation{
@@ -282,7 +278,7 @@ func TestIssueProperty(t *testing.T) {
 		key.Address(),
 	)
 	require.NoError(err)
-	issueAndAccept(require, env.vm, env.issuer, burnPropertyTx)
+	issueAndAccept(require, env.vm, burnPropertyTx)
 }
 
 func TestIssueTxWithFeeAsset(t *testing.T) {
@@ -296,7 +292,7 @@ func TestIssueTxWithFeeAsset(t *testing.T) {
 
 	// send first asset
 	tx := newTx(t, env.genesisBytes, env.vm.ctx.ChainID, env.vm.parser, feeAssetName)
-	issueAndAccept(require, env.vm, env.issuer, tx)
+	issueAndAccept(require, env.vm, tx)
 }
 
 func TestIssueTxWithAnotherAsset(t *testing.T) {
@@ -345,7 +341,7 @@ func TestIssueTxWithAnotherAsset(t *testing.T) {
 		key.Address(),
 	)
 	require.NoError(err)
-	issueAndAccept(require, env.vm, env.issuer, tx)
+	issueAndAccept(require, env.vm, tx)
 }
 
 func TestVMFormat(t *testing.T) {
@@ -428,17 +424,17 @@ func TestTxAcceptAfterParseTx(t *testing.T) {
 	}}
 	require.NoError(secondTx.SignSECP256K1Fx(env.vm.parser.Codec(), [][]*secp256k1.PrivateKey{{key}}))
 
-	parsedFirstTx, err := env.vm.ParseTx(context.Background(), firstTx.Bytes())
+	parsedFirstTx, err := env.vm.ParseTx(t.Context(), firstTx.Bytes())
 	require.NoError(err)
 
-	require.NoError(parsedFirstTx.Verify(context.Background()))
-	require.NoError(parsedFirstTx.Accept(context.Background()))
+	require.NoError(parsedFirstTx.Verify(t.Context()))
+	require.NoError(parsedFirstTx.Accept(t.Context()))
 
-	parsedSecondTx, err := env.vm.ParseTx(context.Background(), secondTx.Bytes())
+	parsedSecondTx, err := env.vm.ParseTx(t.Context(), secondTx.Bytes())
 	require.NoError(err)
 
-	require.NoError(parsedSecondTx.Verify(context.Background()))
-	require.NoError(parsedSecondTx.Accept(context.Background()))
+	require.NoError(parsedSecondTx.Verify(t.Context()))
+	require.NoError(parsedSecondTx.Accept(t.Context()))
 
 	_, err = env.vm.state.GetTx(firstTx.ID())
 	require.NoError(err)
@@ -513,7 +509,7 @@ func TestIssueImportTx(t *testing.T) {
 
 	env.vm.ctx.Lock.Unlock()
 
-	issueAndAccept(require, env.vm, env.issuer, tx)
+	issueAndAccept(require, env.vm, tx)
 
 	env.vm.ctx.Lock.Lock()
 
@@ -575,11 +571,11 @@ func TestForceAcceptImportTx(t *testing.T) {
 	}}
 	require.NoError(tx.SignSECP256K1Fx(env.vm.parser.Codec(), [][]*secp256k1.PrivateKey{{key}}))
 
-	parsedTx, err := env.vm.ParseTx(context.Background(), tx.Bytes())
+	parsedTx, err := env.vm.ParseTx(t.Context(), tx.Bytes())
 	require.NoError(err)
 
-	require.NoError(parsedTx.Verify(context.Background()))
-	require.NoError(parsedTx.Accept(context.Background()))
+	require.NoError(parsedTx.Verify(t.Context()))
+	require.NoError(parsedTx.Accept(t.Context()))
 
 	id := utxoID.InputID()
 	_, err = env.vm.ctx.SharedMemory.Get(constants.PlatformChainID, [][]byte{id[:]})
@@ -636,7 +632,7 @@ func TestIssueExportTx(t *testing.T) {
 
 	env.vm.ctx.Lock.Unlock()
 
-	issueAndAccept(require, env.vm, env.issuer, tx)
+	issueAndAccept(require, env.vm, tx)
 
 	env.vm.ctx.Lock.Lock()
 
@@ -699,7 +695,7 @@ func TestClearForceAcceptedExportTx(t *testing.T) {
 
 	env.vm.ctx.Lock.Unlock()
 
-	issueAndAccept(require, env.vm, env.issuer, tx)
+	issueAndAccept(require, env.vm, tx)
 
 	env.vm.ctx.Lock.Lock()
 

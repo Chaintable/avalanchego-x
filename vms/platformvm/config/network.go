@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package config
@@ -10,20 +10,21 @@ import (
 )
 
 var DefaultNetwork = Network{
-	MaxValidatorSetStaleness:                    time.Minute,
-	TargetGossipSize:                            20 * units.KiB,
-	PushGossipPercentStake:                      .9,
-	PushGossipNumValidators:                     100,
-	PushGossipNumPeers:                          0,
-	PushRegossipNumValidators:                   10,
-	PushRegossipNumPeers:                        0,
-	PushGossipDiscardedCacheSize:                16384,
-	PushGossipMaxRegossipFrequency:              30 * time.Second,
-	PushGossipFrequency:                         500 * time.Millisecond,
-	PullGossipPollSize:                          1,
-	PullGossipFrequency:                         1500 * time.Millisecond,
-	PullGossipThrottlingPeriod:                  10 * time.Second,
-	PullGossipThrottlingLimit:                   2,
+	MaxValidatorSetStaleness:       time.Minute,
+	TargetGossipSize:               20 * units.KiB,
+	PushGossipPercentStake:         .9,
+	PushGossipNumValidators:        100,
+	PushGossipNumPeers:             0,
+	PushRegossipNumValidators:      10,
+	PushRegossipNumPeers:           0,
+	PushGossipDiscardedCacheSize:   16384,
+	PushGossipMaxRegossipFrequency: 30 * time.Second,
+	PushGossipFrequency:            500 * time.Millisecond,
+	PullGossipFrequency:            1500 * time.Millisecond,
+	PullGossipThrottlingPeriod:     time.Hour,
+	// PullGossipRequestsPerValidator = PullGossipThrottlingPeriod / PullGossipFrequency =
+	// 3600 seconds/period / 1.5 requests/second = 2400 requests/validator
+	PullGossipRequestsPerValidator:              2400,
 	ExpectedBloomFilterElements:                 8 * 1024,
 	ExpectedBloomFilterFalsePositiveProbability: .01,
 	MaxBloomFilterFalsePositiveProbability:      .05,
@@ -63,18 +64,15 @@ type Network struct {
 	// PushGossipFrequency is how frequently rounds of push gossip are
 	// performed.
 	PushGossipFrequency time.Duration `json:"push-gossip-frequency"`
-	// PullGossipPollSize is the number of validators to sample when performing
-	// a round of pull gossip.
-	PullGossipPollSize int `json:"pull-gossip-poll-size"`
 	// PullGossipFrequency is how frequently rounds of pull gossip are
 	// performed.
 	PullGossipFrequency time.Duration `json:"pull-gossip-frequency"`
 	// PullGossipThrottlingPeriod is how large of a window the throttler should
 	// use.
 	PullGossipThrottlingPeriod time.Duration `json:"pull-gossip-throttling-period"`
-	// PullGossipThrottlingLimit is the number of pull querys that are allowed
-	// by a validator in every throttling window.
-	PullGossipThrottlingLimit int `json:"pull-gossip-throttling-limit"`
+	// PullGossipRequestsPerValidator is the number of pull gossip requests that
+	// a validator is expected to make in a throttling period.
+	PullGossipRequestsPerValidator float64 `json:"pull-gossip-requests-per-validator"`
 	// ExpectedBloomFilterElements is the number of elements to expect when
 	// creating a new bloom filter. The larger this number is, the larger the
 	// bloom filter will be.

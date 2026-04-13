@@ -1,10 +1,9 @@
-// Copyright (C) 2019-2024, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package executor
 
 import (
-	"context"
 	"errors"
 	"testing"
 	"time"
@@ -128,7 +127,7 @@ func TestBlockVerify(t *testing.T) {
 				}
 				mockBlock.EXPECT().Txs().Return([]*txs.Tx{errTx}).AnyTimes()
 
-				mempool, err := mempool.New("", prometheus.NewRegistry(), nil)
+				mempool, err := mempool.New("", prometheus.NewRegistry())
 				require.NoError(t, err)
 				return &Block{
 					Block: mockBlock,
@@ -286,7 +285,7 @@ func TestBlockVerify(t *testing.T) {
 				mockParentState.EXPECT().GetLastAccepted().Return(parentID)
 				mockParentState.EXPECT().GetTimestamp().Return(blockTimestamp)
 
-				mempool, err := mempool.New("", prometheus.NewRegistry(), nil)
+				mempool, err := mempool.New("", prometheus.NewRegistry())
 				require.NoError(t, err)
 				return &Block{
 					Block: mockBlock,
@@ -337,7 +336,7 @@ func TestBlockVerify(t *testing.T) {
 				mockParentState.EXPECT().GetLastAccepted().Return(parentID)
 				mockParentState.EXPECT().GetTimestamp().Return(blockTimestamp)
 
-				mempool, err := mempool.New("", prometheus.NewRegistry(), nil)
+				mempool, err := mempool.New("", prometheus.NewRegistry())
 				require.NoError(t, err)
 				return &Block{
 					Block: mockBlock,
@@ -415,7 +414,7 @@ func TestBlockVerify(t *testing.T) {
 				mockParentState.EXPECT().GetLastAccepted().Return(parentID)
 				mockParentState.EXPECT().GetTimestamp().Return(blockTimestamp)
 
-				mempool, err := mempool.New("", prometheus.NewRegistry(), nil)
+				mempool, err := mempool.New("", prometheus.NewRegistry())
 				require.NoError(t, err)
 				return &Block{
 					Block: mockBlock,
@@ -526,7 +525,7 @@ func TestBlockVerify(t *testing.T) {
 				mockParentState.EXPECT().GetLastAccepted().Return(parentID)
 				mockParentState.EXPECT().GetTimestamp().Return(blockTimestamp)
 
-				mempool, err := mempool.New("", prometheus.NewRegistry(), nil)
+				mempool, err := mempool.New("", prometheus.NewRegistry())
 				require.NoError(t, err)
 
 				return &Block{
@@ -577,7 +576,7 @@ func TestBlockVerify(t *testing.T) {
 			ctrl := gomock.NewController(t)
 
 			b := tt.blockFunc(ctrl)
-			err := b.Verify(context.Background())
+			err := b.Verify(t.Context())
 			require.ErrorIs(err, tt.expectedErr)
 			if tt.postVerify != nil {
 				tt.postVerify(require, b)
@@ -600,7 +599,7 @@ func TestBlockAccept(t *testing.T) {
 				mockBlock.EXPECT().ID().Return(ids.GenerateTestID()).AnyTimes()
 				mockBlock.EXPECT().Txs().Return([]*txs.Tx{}).AnyTimes()
 
-				mempool, err := mempool.New("", prometheus.NewRegistry(), nil)
+				mempool, err := mempool.New("", prometheus.NewRegistry())
 				require.NoError(t, err)
 
 				return &Block{
@@ -623,7 +622,7 @@ func TestBlockAccept(t *testing.T) {
 				mockBlock.EXPECT().ID().Return(blockID).AnyTimes()
 				mockBlock.EXPECT().Txs().Return([]*txs.Tx{}).AnyTimes()
 
-				mempool, err := mempool.New("", prometheus.NewRegistry(), nil)
+				mempool, err := mempool.New("", prometheus.NewRegistry())
 				require.NoError(t, err)
 
 				mockManagerState := statemock.NewState(ctrl)
@@ -657,7 +656,7 @@ func TestBlockAccept(t *testing.T) {
 				mockBlock.EXPECT().ID().Return(blockID).AnyTimes()
 				mockBlock.EXPECT().Txs().Return([]*txs.Tx{}).AnyTimes()
 
-				mempool, err := mempool.New("", prometheus.NewRegistry(), nil)
+				mempool, err := mempool.New("", prometheus.NewRegistry())
 				require.NoError(t, err)
 
 				mockManagerState := statemock.NewState(ctrl)
@@ -696,7 +695,7 @@ func TestBlockAccept(t *testing.T) {
 				mockBlock.EXPECT().ID().Return(blockID).AnyTimes()
 				mockBlock.EXPECT().Txs().Return([]*txs.Tx{}).AnyTimes()
 
-				mempool, err := mempool.New("", prometheus.NewRegistry(), nil)
+				mempool, err := mempool.New("", prometheus.NewRegistry())
 				require.NoError(t, err)
 
 				mockManagerState := statemock.NewState(ctrl)
@@ -741,7 +740,7 @@ func TestBlockAccept(t *testing.T) {
 				mockBlock.EXPECT().Parent().Return(ids.GenerateTestID()).AnyTimes()
 				mockBlock.EXPECT().Txs().Return([]*txs.Tx{}).AnyTimes()
 
-				mempool, err := mempool.New("", prometheus.NewRegistry(), nil)
+				mempool, err := mempool.New("", prometheus.NewRegistry())
 				require.NoError(t, err)
 
 				mockManagerState := statemock.NewState(ctrl)
@@ -784,7 +783,7 @@ func TestBlockAccept(t *testing.T) {
 			ctrl := gomock.NewController(t)
 
 			b := tt.blockFunc(ctrl)
-			err := b.Accept(context.Background())
+			err := b.Accept(t.Context())
 			require.ErrorIs(err, tt.expectedErr)
 			if err == nil {
 				// Make sure block is removed from cache
@@ -847,7 +846,7 @@ func TestBlockReject(t *testing.T) {
 					executionFailsTx,
 				})
 
-				mempool, err := mempool.New("", prometheus.NewRegistry(), nil)
+				mempool, err := mempool.New("", prometheus.NewRegistry())
 				require.NoError(t, err)
 
 				lastAcceptedID := ids.GenerateTestID()
@@ -900,7 +899,7 @@ func TestBlockReject(t *testing.T) {
 					tx2,
 				})
 
-				mempool, err := mempool.New("", prometheus.NewRegistry(), nil)
+				mempool, err := mempool.New("", prometheus.NewRegistry())
 				require.NoError(t, err)
 
 				lastAcceptedID := ids.GenerateTestID()
@@ -930,7 +929,7 @@ func TestBlockReject(t *testing.T) {
 			ctrl := gomock.NewController(t)
 
 			b := tt.blockFunc(ctrl)
-			require.NoError(b.Reject(context.Background()))
+			require.NoError(b.Reject(t.Context()))
 			_, ok := b.manager.blkIDToState[b.ID()]
 			require.False(ok)
 		})

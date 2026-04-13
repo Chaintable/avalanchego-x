@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package indexer
@@ -29,10 +29,10 @@ func (mc *mockClient) SendRequest(_ context.Context, method string, _ interface{
 
 func TestIndexClient(t *testing.T) {
 	require := require.New(t)
-	client := client{}
+	client := Client{}
 	{
 		// Test GetIndex
-		client.requester = &mockClient{
+		client.Requester = &mockClient{
 			require:        require,
 			expectedMethod: "index.getIndex",
 			onSendRequestF: func(reply interface{}) error {
@@ -40,7 +40,7 @@ func TestIndexClient(t *testing.T) {
 				return nil
 			},
 		}
-		index, err := client.GetIndex(context.Background(), ids.Empty)
+		index, err := client.GetIndex(t.Context(), ids.Empty)
 		require.NoError(err)
 		require.Equal(uint64(5), index)
 	}
@@ -50,7 +50,7 @@ func TestIndexClient(t *testing.T) {
 		bytes := utils.RandomBytes(10)
 		bytesStr, err := formatting.Encode(formatting.Hex, bytes)
 		require.NoError(err)
-		client.requester = &mockClient{
+		client.Requester = &mockClient{
 			require:        require,
 			expectedMethod: "index.getLastAccepted",
 			onSendRequestF: func(reply interface{}) error {
@@ -62,7 +62,7 @@ func TestIndexClient(t *testing.T) {
 				return nil
 			},
 		}
-		container, index, err := client.GetLastAccepted(context.Background())
+		container, index, err := client.GetLastAccepted(t.Context())
 		require.NoError(err)
 		require.Equal(id, container.ID)
 		require.Equal(bytes, container.Bytes)
@@ -74,7 +74,7 @@ func TestIndexClient(t *testing.T) {
 		bytes := utils.RandomBytes(10)
 		bytesStr, err := formatting.Encode(formatting.Hex, bytes)
 		require.NoError(err)
-		client.requester = &mockClient{
+		client.Requester = &mockClient{
 			require:        require,
 			expectedMethod: "index.getContainerRange",
 			onSendRequestF: func(reply interface{}) error {
@@ -85,7 +85,7 @@ func TestIndexClient(t *testing.T) {
 				return nil
 			},
 		}
-		containers, err := client.GetContainerRange(context.Background(), 1, 10)
+		containers, err := client.GetContainerRange(t.Context(), 1, 10)
 		require.NoError(err)
 		require.Len(containers, 1)
 		require.Equal(id, containers[0].ID)
@@ -93,7 +93,7 @@ func TestIndexClient(t *testing.T) {
 	}
 	{
 		// Test IsAccepted
-		client.requester = &mockClient{
+		client.Requester = &mockClient{
 			require:        require,
 			expectedMethod: "index.isAccepted",
 			onSendRequestF: func(reply interface{}) error {
@@ -101,7 +101,7 @@ func TestIndexClient(t *testing.T) {
 				return nil
 			},
 		}
-		isAccepted, err := client.IsAccepted(context.Background(), ids.Empty)
+		isAccepted, err := client.IsAccepted(t.Context(), ids.Empty)
 		require.NoError(err)
 		require.True(isAccepted)
 	}
@@ -111,7 +111,7 @@ func TestIndexClient(t *testing.T) {
 		bytes := utils.RandomBytes(10)
 		bytesStr, err := formatting.Encode(formatting.Hex, bytes)
 		require.NoError(err)
-		client.requester = &mockClient{
+		client.Requester = &mockClient{
 			require:        require,
 			expectedMethod: "index.getContainerByID",
 			onSendRequestF: func(reply interface{}) error {
@@ -123,7 +123,7 @@ func TestIndexClient(t *testing.T) {
 				return nil
 			},
 		}
-		container, index, err := client.GetContainerByID(context.Background(), id)
+		container, index, err := client.GetContainerByID(t.Context(), id)
 		require.NoError(err)
 		require.Equal(id, container.ID)
 		require.Equal(bytes, container.Bytes)

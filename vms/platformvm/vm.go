@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package platformvm
@@ -52,10 +52,11 @@ import (
 )
 
 var (
-	_ snowmanblock.ChainVM                      = (*VM)(nil)
-	_ snowmanblock.BuildBlockWithContextChainVM = (*VM)(nil)
-	_ secp256k1fx.VM                            = (*VM)(nil)
-	_ validators.State                          = (*VM)(nil)
+	_ snowmanblock.ChainVM                         = (*VM)(nil)
+	_ snowmanblock.BuildBlockWithContextChainVM    = (*VM)(nil)
+	_ snowmanblock.SetPreferenceWithContextChainVM = (*VM)(nil)
+	_ secp256k1fx.VM                               = (*VM)(nil)
+	_ validators.State                             = (*VM)(nil)
 )
 
 type VM struct {
@@ -75,7 +76,7 @@ type VM struct {
 	ctx *snow.Context
 	db  database.Database
 
-	state state.State
+	state *state.State
 
 	fx            fx.Fx
 	codecRegistry codec.Registry
@@ -100,7 +101,6 @@ func (vm *VM) Initialize(
 	genesisBytes []byte,
 	_ []byte,
 	configBytes []byte,
-	toEngine chan<- common.Message,
 	_ []*common.Fx,
 	appSender common.AppSender,
 ) error {
@@ -167,14 +167,19 @@ func (vm *VM) Initialize(
 		Bootstrapped: &vm.bootstrapped,
 	}
 
-	mempool, err := pmempool.New("mempool", registerer)
+	mempool, err := pmempool.New(
+		"mempool",
+		vm.Internal.DynamicFeeConfig.Weights,
+		execConfig.MempoolGasCapacity,
+		vm.ctx.AVAXAssetID,
+		registerer,
+	)
 	if err != nil {
 		return fmt.Errorf("failed to create mempool: %w", err)
 	}
 
 	vm.manager = blockexecutor.NewManager(
 		mempool,
-		toEngine,
 		vm.metrics,
 		vm.state,
 		txExecutorBackend,
@@ -192,7 +197,6 @@ func (vm *VM) Initialize(
 		),
 		txVerifier,
 		mempool,
-		toEngine,
 		txExecutorBackend.Config.PartialSyncPrimaryNetwork,
 		appSender,
 		chainCtx.Lock.RLocker(),
@@ -213,7 +217,6 @@ func (vm *VM) Initialize(
 
 	vm.Builder = blockbuilder.New(
 		mempool,
-		toEngine,
 		txExecutorBackend,
 		vm.manager,
 	)
@@ -369,13 +372,7 @@ func (vm *VM) onNormalOperationsStarted() error {
 		vm.Validators.RegisterSetCallbackListener(subnetID, vl)
 	}
 
-	if err := vm.state.Commit(); err != nil {
-		return err
-	}
-
-	// Start the block builder
-	vm.Builder.StartBlockTimer()
-	return nil
+	return vm.state.Commit()
 }
 
 func (vm *VM) SetState(_ context.Context, state snow.State) error {
@@ -396,7 +393,6 @@ func (vm *VM) Shutdown(context.Context) error {
 	}
 
 	vm.onShutdownCtxCancel()
-	vm.Builder.ShutdownBlockTimer()
 
 	if vm.uptimeManager.StartedTracking() {
 		primaryVdrIDs := vm.Validators.GetValidatorIDs(constants.PrimaryNetworkID)
@@ -436,9 +432,12 @@ func (vm *VM) LastAccepted(context.Context) (ids.ID, error) {
 
 // SetPreference sets the preferred block to be the one with ID [blkID]
 func (vm *VM) SetPreference(_ context.Context, blkID ids.ID) error {
-	if vm.manager.SetPreference(blkID) {
-		vm.Builder.ResetBlockTimer()
-	}
+	vm.manager.SetPreference(blkID, nil)
+	return nil
+}
+
+func (vm *VM) SetPreferenceWithContext(_ context.Context, blkID ids.ID, blockCtx *snowmanblock.Context) error {
+	vm.manager.SetPreference(blkID, blockCtx)
 	return nil
 }
 
@@ -464,6 +463,10 @@ func (vm *VM) CreateHandlers(context.Context) (map[string]http.Handler, error) {
 	return map[string]http.Handler{
 		"": server,
 	}, err
+}
+
+func (*VM) NewHTTPHandler(context.Context) (http.Handler, error) {
+	return nil, nil
 }
 
 func (vm *VM) Connected(ctx context.Context, nodeID ids.NodeID, version *version.Application) error {

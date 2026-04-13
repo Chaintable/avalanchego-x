@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package tmpnet
@@ -6,6 +6,7 @@ package tmpnet
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -17,8 +18,13 @@ import (
 
 	"go.uber.org/zap"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/runtime/serializer/yaml"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/tools/portforward"
@@ -28,6 +34,7 @@ import (
 	"github.com/ava-labs/avalanchego/api/info"
 	"github.com/ava-labs/avalanchego/config"
 	"github.com/ava-labs/avalanchego/ids"
+	"github.com/ava-labs/avalanchego/tests/fixture/stacktrace"
 	"github.com/ava-labs/avalanchego/utils/logging"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -36,24 +43,12 @@ import (
 	restclient "k8s.io/client-go/rest"
 )
 
-// DefaultPodFlags defines common flags for avalanchego nodes running in a pod.
-func DefaultPodFlags(networkName string, dataDir string) map[string]string {
-	return map[string]string{
-		config.DataDirKey:                dataDir,
-		config.NetworkNameKey:            networkName,
-		config.SybilProtectionEnabledKey: "false",
-		config.HealthCheckFreqKey:        "500ms", // Ensure rapid detection of a healthy state
-		config.LogDisplayLevelKey:        logging.Debug.String(),
-		config.LogLevelKey:               logging.Debug.String(),
-		config.HTTPHostKey:               "0.0.0.0", // Need to bind to pod IP to ensure kubelet can access the http port for the readiness check
-	}
-}
-
 // NewNodeStatefulSet returns a statefulset for an avalanchego node.
 func NewNodeStatefulSet(
 	name string,
 	generateName bool,
 	imageName string,
+	imagePullPolicy corev1.PullPolicy,
 	containerName string,
 	volumeName string,
 	volumeSize string,
@@ -68,10 +63,17 @@ func NewNodeStatefulSet(
 		objectMeta.Name = name
 	}
 
+	// The following sets of annotations can coexist safely since each
+	// collection agent only reads the annotations it recognizes.
 	podAnnotations := map[string]string{
+		// Configure collection by prometheus and promtail
 		"prometheus.io/scrape": "true",
 		"prometheus.io/path":   "/ext/metrics",
 		"promtail/collect":     "true",
+		// Configure collection by the grafana cloud agent
+		"k8s.grafana.com/metrics_path": "/ext/metrics",
+		"k8s.grafana.com/port":         "9650",
+		"k8s.grafana.com/scrape":       "true",
 	}
 
 	podLabels := map[string]string{
@@ -121,8 +123,9 @@ func NewNodeStatefulSet(
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{
 						{
-							Name:  containerName,
-							Image: imageName,
+							Name:            containerName,
+							Image:           imageName,
+							ImagePullPolicy: imagePullPolicy,
 							Ports: []corev1.ContainerPort{
 								{
 									Name:          "http",
@@ -211,7 +214,7 @@ func WaitForNodeHealthy(
 		outErr,
 	)
 	if err != nil {
-		return ids.NodeID{}, fmt.Errorf("failed to enable local forward for pod: %w", err)
+		return ids.NodeID{}, stacktrace.Errorf("failed to enable local forward for pod: %w", err)
 	}
 	defer close(localPortStopChan)
 	localNodeURI := fmt.Sprintf("http://127.0.0.1:%d", localPort)
@@ -220,12 +223,12 @@ func WaitForNodeHealthy(
 	infoClient := info.NewClient(localNodeURI)
 	bootstrapNodeID, _, err := infoClient.GetNodeID(ctx)
 	if err != nil {
-		return ids.NodeID{}, fmt.Errorf("failed to retrieve node bootstrap ID: %w", err)
+		return ids.NodeID{}, stacktrace.Errorf("failed to retrieve node bootstrap ID: %w", err)
 	}
 	if err := wait.PollImmediateInfinite(healthCheckInterval, func() (bool, error) {
 		healthReply, err := CheckNodeHealth(ctx, localNodeURI)
 		if errors.Is(err, ErrUnrecoverableNodeHealthCheck) {
-			return false, err
+			return false, stacktrace.Wrap(err)
 		} else if err != nil {
 			// Error is potentially recoverable - log and continue
 			log.Debug("failed to check node health",
@@ -235,7 +238,7 @@ func WaitForNodeHealthy(
 		}
 		return healthReply.Healthy, nil
 	}); err != nil {
-		return ids.NodeID{}, fmt.Errorf("failed to wait for node to report healthy: %w", err)
+		return ids.NodeID{}, stacktrace.Errorf("failed to wait for node to report healthy: %w", err)
 	}
 
 	return bootstrapNodeID, nil
@@ -243,7 +246,7 @@ func WaitForNodeHealthy(
 
 // WaitForPodCondition watches the specified pod until the status includes the specified condition.
 func WaitForPodCondition(ctx context.Context, clientset *kubernetes.Clientset, namespace string, podName string, conditionType corev1.PodConditionType) error {
-	return WaitForPodStatus(
+	err := WaitForPodStatus(
 		ctx,
 		clientset,
 		namespace,
@@ -257,6 +260,10 @@ func WaitForPodCondition(ctx context.Context, clientset *kubernetes.Clientset, n
 			return false
 		},
 	)
+	if err != nil {
+		return stacktrace.Errorf("failed to wait for pod condition %s: %w", conditionType, err)
+	}
+	return nil
 }
 
 // WaitForPodStatus watches the specified pod until the status is deemed acceptable by the provided test function.
@@ -269,7 +276,7 @@ func WaitForPodStatus(
 ) error {
 	watch, err := clientset.CoreV1().Pods(namespace).Watch(ctx, metav1.SingleObject(metav1.ObjectMeta{Name: name}))
 	if err != nil {
-		return fmt.Errorf("failed to initiate watch of pod %s/%s: %w", namespace, name, err)
+		return stacktrace.Errorf("failed to initiate watch of pod %s/%s: %w", namespace, name, err)
 	}
 
 	for {
@@ -284,7 +291,7 @@ func WaitForPodStatus(
 				return nil
 			}
 		case <-ctx.Done():
-			return fmt.Errorf("timeout waiting for pod readiness: %w", ctx.Err())
+			return stacktrace.Errorf("timeout waiting for pod status: %w", ctx.Err())
 		}
 	}
 }
@@ -300,7 +307,7 @@ func enableLocalForwardForPod(
 ) (uint16, chan struct{}, error) {
 	transport, upgrader, err := spdy.RoundTripperFor(kubeconfig)
 	if err != nil {
-		return 0, nil, fmt.Errorf("failed to create round tripper: %w", err)
+		return 0, nil, stacktrace.Errorf("failed to create round tripper: %w", err)
 	}
 
 	dialer := spdy.NewDialer(
@@ -320,7 +327,7 @@ func enableLocalForwardForPod(
 	stopChan, readyChan := make(chan struct{}, 1), make(chan struct{}, 1)
 	forwarder, err := portforward.NewOnAddresses(dialer, addresses, ports, stopChan, readyChan, out, errOut)
 	if err != nil {
-		return 0, nil, fmt.Errorf("failed to create forwarder: %w", err)
+		return 0, nil, stacktrace.Errorf("failed to create forwarder: %w", err)
 	}
 
 	go func() {
@@ -336,11 +343,11 @@ func enableLocalForwardForPod(
 	forwardedPorts, err := forwarder.GetPorts()
 	if err != nil {
 		close(stopChan)
-		return 0, nil, fmt.Errorf("failed to get forwarded ports: %w", err)
+		return 0, nil, stacktrace.Errorf("failed to get forwarded ports: %w", err)
 	}
 	if len(forwardedPorts) == 0 {
 		close(stopChan)
-		return 0, nil, fmt.Errorf("failed to find at least one forwarded port: %w", err)
+		return 0, nil, stacktrace.Errorf("failed to find at least one forwarded port: %w", err)
 	}
 	return forwardedPorts[0].Local, stopChan, nil
 }
@@ -375,12 +382,83 @@ func GetClientConfig(log logging.Logger, path string, context string) (*restclie
 func GetClientset(log logging.Logger, path string, context string) (*kubernetes.Clientset, error) {
 	clientConfig, err := GetClientConfig(log, path, context)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get client config: %w", err)
+		return nil, stacktrace.Errorf("failed to get client config: %w", err)
 	}
 
 	clientset, err := kubernetes.NewForConfig(clientConfig)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create clientset: %w", err)
+		return nil, stacktrace.Errorf("failed to create clientset: %w", err)
 	}
 	return clientset, nil
+}
+
+// applyManifest creates or updates the resources defined by the provided manifest using server-side apply.
+// If namespace is empty, the namespace from the manifest will be used for namespaced resources.
+func applyManifest(
+	ctx context.Context,
+	log logging.Logger,
+	dynamicClient dynamic.Interface,
+	manifest []byte,
+	namespace string,
+) error {
+	// Split the manifest into individual resources
+	decoder := yaml.NewDecodingSerializer(unstructured.UnstructuredJSONScheme)
+	documents := strings.Split(string(manifest), "\n---\n")
+
+	for _, doc := range documents {
+		doc := strings.TrimSpace(doc)
+		if strings.TrimSpace(doc) == "" || strings.HasPrefix(doc, "#") {
+			continue
+		}
+
+		obj := &unstructured.Unstructured{}
+		_, gvk, err := decoder.Decode([]byte(doc), nil, obj)
+		if err != nil {
+			return stacktrace.Errorf("failed to decode manifest: %w", err)
+		}
+
+		gvr := schema.GroupVersionResource{
+			Group:    gvk.Group,
+			Version:  gvk.Version,
+			Resource: strings.ToLower(gvk.Kind) + "s",
+		}
+
+		// Determine namespace for the resource
+		resourceNamespace := namespace
+		if resourceNamespace == "" {
+			// Use namespace from the manifest if not provided
+			resourceNamespace = obj.GetNamespace()
+		}
+
+		var resourceInterface dynamic.ResourceInterface
+		if strings.HasPrefix(gvk.Kind, "Cluster") || gvk.Kind == "Namespace" {
+			resourceInterface = dynamicClient.Resource(gvr)
+		} else {
+			resourceInterface = dynamicClient.Resource(gvr).Namespace(resourceNamespace)
+		}
+
+		// Convert object to JSON for server-side apply
+		data, err := json.Marshal(obj)
+		if err != nil {
+			return stacktrace.Errorf("failed to marshal object to JSON: %w", err)
+		}
+
+		// Use server-side apply to create or update the resource
+		_, err = resourceInterface.Patch(ctx, obj.GetName(), types.ApplyPatchType, data, metav1.PatchOptions{
+			FieldManager: "tmpnet-apply",
+			Force:        ptr.To(true),
+		})
+		if err != nil {
+			return stacktrace.Errorf("failed to apply %s %s/%s: %w", gvk.Kind, resourceNamespace, obj.GetName(), err)
+		}
+		log.Info("applied resource",
+			zap.String("kind", gvk.Kind),
+			zap.String("namespace", resourceNamespace),
+			zap.String("name", obj.GetName()),
+		)
+	}
+
+	// TODO(marun) Check that the resources are running and healthy
+
+	return nil
 }

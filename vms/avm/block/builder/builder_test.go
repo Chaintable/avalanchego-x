@@ -1,10 +1,9 @@
-// Copyright (C) 2019-2024, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package builder
 
 import (
-	"context"
 	"errors"
 	"testing"
 	"time"
@@ -20,7 +19,6 @@ import (
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/snow"
 	"github.com/ava-labs/avalanchego/snow/consensus/snowman"
-	"github.com/ava-labs/avalanchego/snow/engine/common"
 	"github.com/ava-labs/avalanchego/utils/constants"
 	"github.com/ava-labs/avalanchego/utils/crypto/secp256k1"
 	"github.com/ava-labs/avalanchego/utils/logging"
@@ -65,7 +63,7 @@ func TestBuilderBuildBlock(t *testing.T) {
 				manager.EXPECT().Preferred().Return(preferredID)
 				manager.EXPECT().GetStatelessBlock(preferredID).Return(nil, errTest)
 
-				mempool, err := mempool.New("", prometheus.NewRegistry(), nil)
+				mempool, err := mempool.New("", prometheus.NewRegistry())
 				require.NoError(t, err)
 
 				return New(
@@ -96,7 +94,7 @@ func TestBuilderBuildBlock(t *testing.T) {
 				manager.EXPECT().GetStatelessBlock(preferredID).Return(preferredBlock, nil)
 				manager.EXPECT().GetState(preferredID).Return(nil, false)
 
-				mempool, err := mempool.New("", prometheus.NewRegistry(), nil)
+				mempool, err := mempool.New("", prometheus.NewRegistry())
 				require.NoError(t, err)
 
 				return New(
@@ -136,7 +134,7 @@ func TestBuilderBuildBlock(t *testing.T) {
 				unsignedTx.EXPECT().InputIDs().Return(nil)
 				tx := &txs.Tx{Unsigned: unsignedTx}
 
-				mempool, err := mempool.New("", prometheus.NewRegistry(), nil)
+				mempool, err := mempool.New("", prometheus.NewRegistry())
 				require.NoError(t, err)
 				require.NoError(t, mempool.Add(tx))
 
@@ -178,7 +176,7 @@ func TestBuilderBuildBlock(t *testing.T) {
 				unsignedTx.EXPECT().InputIDs().Return(nil)
 				tx := &txs.Tx{Unsigned: unsignedTx}
 
-				mempool, err := mempool.New("", prometheus.NewRegistry(), nil)
+				mempool, err := mempool.New("", prometheus.NewRegistry())
 				require.NoError(t, err)
 				require.NoError(t, mempool.Add(tx))
 
@@ -221,7 +219,7 @@ func TestBuilderBuildBlock(t *testing.T) {
 				unsignedTx.EXPECT().InputIDs().Return(nil)
 				tx := &txs.Tx{Unsigned: unsignedTx}
 
-				mempool, err := mempool.New("", prometheus.NewRegistry(), nil)
+				mempool, err := mempool.New("", prometheus.NewRegistry())
 				require.NoError(t, err)
 				require.NoError(t, mempool.Add(tx))
 
@@ -303,7 +301,7 @@ func TestBuilderBuildBlock(t *testing.T) {
 					},
 				)
 
-				mempool, err := mempool.New("", prometheus.NewRegistry(), nil)
+				mempool, err := mempool.New("", prometheus.NewRegistry())
 				require.NoError(t, err)
 				require.NoError(t, mempool.Add(tx1))
 				require.NoError(t, mempool.Add(tx2))
@@ -374,7 +372,7 @@ func TestBuilderBuildBlock(t *testing.T) {
 				unsignedTx.EXPECT().InputIDs().Return(nil)
 				tx := &txs.Tx{Unsigned: unsignedTx}
 
-				mempool, err := mempool.New("", prometheus.NewRegistry(), nil)
+				mempool, err := mempool.New("", prometheus.NewRegistry())
 				require.NoError(t, err)
 				require.NoError(t, mempool.Add(tx))
 
@@ -446,7 +444,7 @@ func TestBuilderBuildBlock(t *testing.T) {
 				unsignedTx.EXPECT().InputIDs().Return(nil)
 				tx := &txs.Tx{Unsigned: unsignedTx}
 
-				mempool, err := mempool.New("", prometheus.NewRegistry(), nil)
+				mempool, err := mempool.New("", prometheus.NewRegistry())
 				require.NoError(t, err)
 				require.NoError(t, mempool.Add(tx))
 
@@ -476,7 +474,7 @@ func TestBuilderBuildBlock(t *testing.T) {
 			ctrl := gomock.NewController(t)
 
 			builder := tt.builderFunc(ctrl)
-			_, err := builder.BuildBlock(context.Background())
+			_, err := builder.BuildBlock(t.Context())
 			require.ErrorIs(t, err, tt.expectedErr)
 		})
 	}
@@ -488,8 +486,7 @@ func TestBlockBuilderAddLocalTx(t *testing.T) {
 	require := require.New(t)
 
 	registerer := prometheus.NewRegistry()
-	toEngine := make(chan common.Message, 100)
-	mempool, err := mempool.New("mempool", registerer, toEngine)
+	mempool, err := mempool.New("mempool", registerer)
 	require.NoError(err)
 	// add a tx to the mempool
 	tx := transactions[0]
@@ -541,7 +538,7 @@ func TestBlockBuilderAddLocalTx(t *testing.T) {
 	builder := New(backend, manager, clk, mempool)
 
 	// show that build block fails if tx is invalid
-	_, err = builder.BuildBlock(context.Background())
+	_, err = builder.BuildBlock(t.Context())
 	require.ErrorIs(err, ErrNoTransactions)
 }
 

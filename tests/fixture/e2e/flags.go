@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package e2e
@@ -40,7 +40,7 @@ type FlagVars struct {
 	stopNetwork    bool
 	restartNetwork bool
 
-	activateGranite bool
+	activateLatest bool
 }
 
 func (v *FlagVars) NetworkCmd() (NetworkCmd, error) {
@@ -120,15 +120,50 @@ func (v *FlagVars) NetworkShutdownDelay() time.Duration {
 	return 0
 }
 
-func (v *FlagVars) ActivateGranite() bool {
-	return v.activateGranite
+func (v *FlagVars) ActivateLatest() bool {
+	return v.activateLatest
 }
 
-func RegisterFlags() *FlagVars {
-	return RegisterFlagsWithDefaultOwner("")
+type DefaultOption func(*DefaultOptions)
+
+type DefaultOptions struct {
+	owner     string
+	nodeCount int
 }
 
-func RegisterFlagsWithDefaultOwner(defaultOwner string) *FlagVars {
+func newDefaultOptions(ops []DefaultOption) *DefaultOptions {
+	o := &DefaultOptions{}
+	for _, op := range ops {
+		op(o)
+	}
+	return o
+}
+
+func (d *DefaultOptions) Owner() string {
+	return d.owner
+}
+
+func (d *DefaultOptions) NodeCount() int {
+	if d.nodeCount <= 0 {
+		return tmpnet.DefaultNodeCount
+	}
+
+	return d.nodeCount
+}
+
+func WithDefaultOwner(owner string) DefaultOption {
+	return func(d *DefaultOptions) {
+		d.owner = owner
+	}
+}
+
+func WithDefaultNodeCount(nodeCount int) DefaultOption {
+	return func(d *DefaultOptions) {
+		d.nodeCount = nodeCount
+	}
+}
+
+func RegisterFlags(ops ...DefaultOption) *FlagVars {
 	vars := FlagVars{}
 
 	flag.BoolVar(
@@ -138,7 +173,11 @@ func RegisterFlagsWithDefaultOwner(defaultOwner string) *FlagVars {
 		"[optional] start a new network and exit without executing any tests. The new network cannot be reused with --reuse-network.",
 	)
 
-	vars.startNetworkVars = flags.NewStartNetworkFlagVars(defaultOwner)
+	options := newDefaultOptions(ops)
+	vars.startNetworkVars = flags.NewStartNetworkFlagVars(
+		options.Owner(),
+		options.NodeCount(),
+	)
 
 	vars.collectorVars = flags.NewCollectorFlagVars()
 
@@ -176,10 +215,10 @@ func RegisterFlagsWithDefaultOwner(defaultOwner string) *FlagVars {
 	)
 
 	flag.BoolVar(
-		&vars.activateGranite,
-		"activate-granite",
+		&vars.activateLatest,
+		"activate-latest",
 		false,
-		"[optional] activate the granite upgrade",
+		"[optional] activate all upgrades up to and including the latest upgrade",
 	)
 
 	return &vars

@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package handler
@@ -16,6 +16,7 @@ import (
 	"github.com/ava-labs/avalanchego/snow"
 	"github.com/ava-labs/avalanchego/snow/consensus/snowball"
 	"github.com/ava-labs/avalanchego/snow/engine/enginetest"
+	"github.com/ava-labs/avalanchego/snow/engine/snowman/block"
 	"github.com/ava-labs/avalanchego/snow/networking/tracker"
 	"github.com/ava-labs/avalanchego/snow/snowtest"
 	"github.com/ava-labs/avalanchego/snow/validators"
@@ -32,16 +33,16 @@ import (
 
 func TestHealthCheckSubnet(t *testing.T) {
 	tests := map[string]struct {
-		consensusParams snowball.Parameters
+		consensusParams *snowball.Parameters
 	}{
 		"default consensus params": {
-			consensusParams: snowball.DefaultParameters,
+			consensusParams: &snowball.DefaultParameters,
 		},
 		"custom consensus params": {
-			func() snowball.Parameters {
+			func() *snowball.Parameters {
 				params := snowball.DefaultParameters
 				params.K = params.AlphaConfidence
-				return params
+				return &params
 			}(),
 		},
 	}
@@ -69,7 +70,7 @@ func TestHealthCheckSubnet(t *testing.T) {
 			sb := subnets.New(
 				ctx.NodeID,
 				subnets.Config{
-					ConsensusParameters: test.consensusParams,
+					SnowParameters: test.consensusParams,
 				},
 			)
 
@@ -78,14 +79,17 @@ func TestHealthCheckSubnet(t *testing.T) {
 				"",
 				prometheus.NewRegistry(),
 				nil,
-				version.CurrentApp,
+				version.Current,
 			)
 			require.NoError(err)
 
+			subscription, _ := createSubscriber()
+
 			handlerIntf, err := New(
 				ctx,
+				&block.ChangeNotifier{},
+				subscription,
 				vdrs,
-				nil,
 				time.Second,
 				testThreadPoolSize,
 				resourceTracker,
@@ -111,14 +115,14 @@ func TestHealthCheckSubnet(t *testing.T) {
 			}
 
 			handlerIntf.SetEngineManager(&EngineManager{
-				Snowman: &Engine{
+				Chain: &Engine{
 					Bootstrapper: bootstrapper,
 					Consensus:    engine,
 				},
 			})
 
 			ctx.State.Set(snow.EngineState{
-				Type:  p2ppb.EngineType_ENGINE_TYPE_SNOWMAN,
+				Type:  p2ppb.EngineType_ENGINE_TYPE_CHAIN,
 				State: snow.NormalOp, // assumed bootstrap is done
 			})
 
@@ -126,7 +130,7 @@ func TestHealthCheckSubnet(t *testing.T) {
 				return nil
 			}
 
-			handlerIntf.Start(context.Background(), false)
+			handlerIntf.Start(t.Context(), false)
 
 			testVdrCount := 4
 			vdrIDs := set.NewSet[ids.NodeID](testVdrCount)
@@ -138,12 +142,12 @@ func TestHealthCheckSubnet(t *testing.T) {
 			}
 			vdrIDsList := vdrIDs.List()
 			for index, nodeID := range vdrIDsList {
-				require.NoError(peerTracker.Connected(context.Background(), nodeID, nil))
+				require.NoError(peerTracker.Connected(t.Context(), nodeID, nil))
 
-				details, err := handlerIntf.HealthCheck(context.Background())
+				details, err := handlerIntf.HealthCheck(t.Context())
 				expectedPercentConnected := float64(index+1) / float64(testVdrCount)
 				conf := sb.Config()
-				minPercentConnected := conf.ConsensusParameters.MinPercentConnectedHealthy()
+				minPercentConnected := conf.SnowParameters.MinPercentConnectedHealthy()
 				if expectedPercentConnected >= minPercentConnected {
 					require.NoError(err)
 					continue

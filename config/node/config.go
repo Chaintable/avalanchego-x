@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package node
@@ -19,7 +19,6 @@ import (
 	"github.com/ava-labs/avalanchego/subnets"
 	"github.com/ava-labs/avalanchego/trace"
 	"github.com/ava-labs/avalanchego/upgrade"
-	"github.com/ava-labs/avalanchego/utils/crypto/bls"
 	"github.com/ava-labs/avalanchego/utils/logging"
 	"github.com/ava-labs/avalanchego/utils/profiler"
 	"github.com/ava-labs/avalanchego/utils/set"
@@ -76,12 +75,18 @@ type StakingConfig struct {
 	SybilProtectionEnabled        bool            `json:"sybilProtectionEnabled"`
 	PartialSyncPrimaryNetwork     bool            `json:"partialSyncPrimaryNetwork"`
 	StakingTLSCert                tls.Certificate `json:"-"`
-	StakingSigningKey             bls.Signer      `json:"-"`
 	SybilProtectionDisabledWeight uint64          `json:"sybilProtectionDisabledWeight"`
-	// not accessed but used for logging
-	StakingKeyPath    string `json:"stakingKeyPath"`
-	StakingCertPath   string `json:"stakingCertPath"`
-	StakingSignerPath string `json:"stakingSignerPath"`
+	StakingTLSKeyPath             string          `json:"stakingTLSKeyPath"`
+	StakingTLSCertPath            string          `json:"stakingTLSCertPath"`
+	StakingSignerConfig           `json:"stakingSingerConfig"`
+}
+
+type StakingSignerConfig struct {
+	EphemeralSignerEnabled bool   `json:"ephemeralSignerEnabled"`
+	KeyContent             string `json:"signerKeyContent"`
+	KeyPath                string `json:"keyPath"`
+	RPCEndpoint            string `json:"RPCEndpoint"`
+	KeyPathIsSet           bool   `json:"keyPathIsSet"`
 }
 
 type StateSyncConfig struct {
@@ -172,7 +177,14 @@ type Config struct {
 
 	TrackedSubnets set.Set[ids.ID] `json:"trackedSubnets"`
 
-	SubnetConfigs map[ids.ID]subnets.Config `json:"subnetConfigs"`
+	// ProposerMinBlockDelay is the minimum delay this node will enforce when
+	// building a snowman++ block on the P-chain and the X-chain. All other
+	// chains are expected to perform their own block production throttling.
+	//
+	// TODO: Remove this flag once the P-chain and X-chain throttle their own
+	// block production.
+	ProposerMinBlockDelay time.Duration             `json:"proposerMinBlockDelay"`
+	SubnetConfigs         map[ids.ID]subnets.Config `json:"subnetConfigs"`
 
 	ChainConfigs map[string]chains.ChainConfig `json:"-"`
 	ChainAliases map[ids.ID][]string           `json:"chainAliases"`
@@ -200,8 +212,8 @@ type Config struct {
 
 	DiskTargeterConfig tracker.TargeterConfig `json:"diskTargeterConfig"`
 
-	RequiredAvailableDiskSpace         uint64 `json:"requiredAvailableDiskSpace"`
-	WarningThresholdAvailableDiskSpace uint64 `json:"warningThresholdAvailableDiskSpace"`
+	RequiredAvailableDiskSpacePercentage uint64 `json:"requiredAvailableDiskSpacePercentage"`
+	WarningAvailableDiskSpacePercentage  uint64 `json:"warningAvailableDiskSpacePercentage"`
 
 	TraceConfig trace.Config `json:"traceConfig"`
 

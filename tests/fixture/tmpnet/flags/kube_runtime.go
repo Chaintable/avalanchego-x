@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package flags
@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/pflag"
 
+	"github.com/ava-labs/avalanchego/tests/fixture/stacktrace"
 	"github.com/ava-labs/avalanchego/tests/fixture/tmpnet"
 )
 
@@ -26,23 +27,26 @@ var (
 )
 
 type kubeRuntimeVars struct {
-	namespace    string
-	image        string
-	volumeSizeGB uint
-	config       *KubeconfigVars
+	namespace              string
+	image                  string
+	volumeSizeGB           uint
+	useExclusiveScheduling bool
+	schedulingLabelKey     string
+	schedulingLabelValue   string
+	config                 *KubeconfigVars
 }
 
 func (v *kubeRuntimeVars) registerWithFlag() {
 	v.config = newKubeconfigFlagVars(kubeDocPrefix)
-	v.register(flag.StringVar, flag.UintVar)
+	v.register(flag.StringVar, flag.UintVar, flag.BoolVar)
 }
 
 func (v *kubeRuntimeVars) registerWithFlagSet(flagSet *pflag.FlagSet) {
 	v.config = newKubeconfigFlagSetVars(flagSet, kubeDocPrefix)
-	v.register(flagSet.StringVar, flagSet.UintVar)
+	v.register(flagSet.StringVar, flagSet.UintVar, flagSet.BoolVar)
 }
 
-func (v *kubeRuntimeVars) register(stringVar varFunc[string], uintVar varFunc[uint]) {
+func (v *kubeRuntimeVars) register(stringVar varFunc[string], uintVar varFunc[uint], boolVar varFunc[bool]) {
 	stringVar(
 		&v.namespace,
 		"kube-namespace",
@@ -64,23 +68,44 @@ func (v *kubeRuntimeVars) register(stringVar varFunc[string], uintVar varFunc[ui
 			tmpnet.MinimumVolumeSizeGB,
 		),
 	)
+	boolVar(
+		&v.useExclusiveScheduling,
+		"kube-use-exclusive-scheduling",
+		false,
+		kubeDocPrefix+"Whether to schedule each AvalancheGo node to a dedicated Kubernetes node",
+	)
+	stringVar(
+		&v.schedulingLabelKey,
+		"kube-scheduling-label-key",
+		"",
+		kubeDocPrefix+"The label key to use for exclusive scheduling for node selection and toleration",
+	)
+	stringVar(
+		&v.schedulingLabelValue,
+		"kube-scheduling-label-value",
+		"",
+		kubeDocPrefix+"The label value to use for exclusive scheduling for node selection and toleration",
+	)
 }
 
 func (v *kubeRuntimeVars) getKubeRuntimeConfig() (*tmpnet.KubeRuntimeConfig, error) {
 	if len(v.namespace) == 0 {
-		return nil, errKubeNamespaceRequired
+		return nil, stacktrace.Wrap(errKubeNamespaceRequired)
 	}
 	if len(v.image) == 0 {
-		return nil, errKubeImageRequired
+		return nil, stacktrace.Wrap(errKubeImageRequired)
 	}
 	if v.volumeSizeGB < tmpnet.MinimumVolumeSizeGB {
-		return nil, errKubeMinVolumeSizeRequired
+		return nil, stacktrace.Wrap(errKubeMinVolumeSizeRequired)
 	}
 	return &tmpnet.KubeRuntimeConfig{
-		ConfigPath:    v.config.Path,
-		ConfigContext: v.config.Context,
-		Namespace:     v.namespace,
-		Image:         v.image,
-		VolumeSizeGB:  v.volumeSizeGB,
+		ConfigPath:             v.config.Path,
+		ConfigContext:          v.config.Context,
+		Namespace:              v.namespace,
+		Image:                  v.image,
+		VolumeSizeGB:           v.volumeSizeGB,
+		UseExclusiveScheduling: v.useExclusiveScheduling,
+		SchedulingLabelKey:     v.schedulingLabelKey,
+		SchedulingLabelValue:   v.schedulingLabelValue,
 	}, nil
 }

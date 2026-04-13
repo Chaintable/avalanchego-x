@@ -1,10 +1,9 @@
-// Copyright (C) 2019-2024, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package tmpnet
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -17,7 +16,7 @@ func TestNetworkSerialization(t *testing.T) {
 
 	tmpDir := t.TempDir()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	network := NewDefaultNetwork("testnet")
 	// Runtime configuration is required
@@ -26,7 +25,7 @@ func TestNetworkSerialization(t *testing.T) {
 	network.PrimarySubnetConfig = ConfigMap{
 		"validatorOnly": true,
 	}
-	require.NoError(network.EnsureDefaultConfig(logging.NoLog{}))
+	require.NoError(network.EnsureDefaultConfig(ctx, logging.NoLog{}))
 	require.NoError(network.Create(tmpDir))
 	// Ensure node runtime is initialized
 	require.NoError(network.readNodes(ctx))

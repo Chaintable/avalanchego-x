@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package rpcchainvm
@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/collectors"
+	"go.uber.org/zap"
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/ava-labs/avalanchego/api/metrics"
@@ -26,6 +27,7 @@ import (
 	"github.com/ava-labs/avalanchego/snow/engine/common"
 	"github.com/ava-labs/avalanchego/snow/engine/common/appsender"
 	"github.com/ava-labs/avalanchego/snow/engine/snowman/block"
+	"github.com/ava-labs/avalanchego/snow/validators"
 	"github.com/ava-labs/avalanchego/snow/validators/gvalidators"
 	"github.com/ava-labs/avalanchego/upgrade"
 	"github.com/ava-labs/avalanchego/utils"
@@ -36,12 +38,10 @@ import (
 	"github.com/ava-labs/avalanchego/vms/platformvm/warp/gwarp"
 	"github.com/ava-labs/avalanchego/vms/rpcchainvm/ghttp"
 	"github.com/ava-labs/avalanchego/vms/rpcchainvm/grpcutils"
-	"github.com/ava-labs/avalanchego/vms/rpcchainvm/messenger"
 
 	aliasreaderpb "github.com/ava-labs/avalanchego/proto/pb/aliasreader"
 	appsenderpb "github.com/ava-labs/avalanchego/proto/pb/appsender"
 	httppb "github.com/ava-labs/avalanchego/proto/pb/http"
-	messengerpb "github.com/ava-labs/avalanchego/proto/pb/messenger"
 	rpcdbpb "github.com/ava-labs/avalanchego/proto/pb/rpcdb"
 	sharedmemorypb "github.com/ava-labs/avalanchego/proto/pb/sharedmemory"
 	validatorstatepb "github.com/ava-labs/avalanchego/proto/pb/validatorstate"
@@ -210,29 +210,13 @@ func (vm *VMServer) Initialize(ctx context.Context, req *vmpb.InitializeRequest)
 
 	vm.connCloser.Add(clientConn)
 
-	msgClient := messenger.NewClient(messengerpb.NewMessengerClient(clientConn))
 	sharedMemoryClient := gsharedmemory.NewClient(sharedmemorypb.NewSharedMemoryClient(clientConn))
 	bcLookupClient := galiasreader.NewClient(aliasreaderpb.NewAliasReaderClient(clientConn))
 	appSenderClient := appsender.NewClient(appsenderpb.NewAppSenderClient(clientConn))
 	validatorStateClient := gvalidators.NewClient(validatorstatepb.NewValidatorStateClient(clientConn))
 	warpSignerClient := gwarp.NewClient(warppb.NewSignerClient(clientConn))
 
-	toEngine := make(chan common.Message, 1)
 	vm.closed = make(chan struct{})
-	go func() {
-		for {
-			select {
-			case msg, ok := <-toEngine:
-				if !ok {
-					return
-				}
-				// Nothing to do with the error within the goroutine
-				_ = msgClient.Notify(msg)
-			case <-vm.closed:
-				return
-			}
-		}
-	}()
 
 	vm.ctx = &snow.Context{
 		NetworkID:       req.NetworkId,
@@ -254,16 +238,18 @@ func (vm *VMServer) Initialize(ctx context.Context, req *vmpb.InitializeRequest)
 		// Signs warp messages
 		WarpSigner: warpSignerClient,
 
-		ValidatorState: validatorStateClient,
+		// The validator state is cached to avoid the gRPC overhead.
+		ValidatorState: validators.NewCachedState(validatorStateClient),
 		// TODO: support remaining snowman++ fields
 
 		ChainDataDir: req.ChainDataDir,
 	}
 
-	if err := vm.vm.Initialize(ctx, vm.ctx, vm.db, req.GenesisBytes, req.UpgradeBytes, req.ConfigBytes, toEngine, nil, appSenderClient); err != nil {
+	if err := vm.vm.Initialize(ctx, vm.ctx, vm.db, req.GenesisBytes, req.UpgradeBytes, req.ConfigBytes, nil, appSenderClient); err != nil {
 		// Ignore errors closing resources to return the original error
 		_ = vm.connCloser.Close()
 		close(vm.closed)
+		vm.log.Error("failed to initialize vm", zap.Error(err))
 		return nil, err
 	}
 
@@ -273,6 +259,7 @@ func (vm *VMServer) Initialize(ctx context.Context, req *vmpb.InitializeRequest)
 		_ = vm.vm.Shutdown(ctx)
 		_ = vm.connCloser.Close()
 		close(vm.closed)
+		vm.log.Error("failed to get last accepted block ID", zap.Error(err))
 		return nil, err
 	}
 
@@ -282,6 +269,7 @@ func (vm *VMServer) Initialize(ctx context.Context, req *vmpb.InitializeRequest)
 		_ = vm.vm.Shutdown(ctx)
 		_ = vm.connCloser.Close()
 		close(vm.closed)
+		vm.log.Error("failed to get last accepted block", zap.Error(err))
 		return nil, err
 	}
 	parentID := blk.Parent()
@@ -357,6 +345,42 @@ func (vm *VMServer) CreateHandlers(ctx context.Context, _ *emptypb.Empty) (*vmpb
 		})
 	}
 	return resp, nil
+}
+
+func (vm *VMServer) NewHTTPHandler(ctx context.Context, _ *emptypb.Empty) (*vmpb.NewHTTPHandlerResponse, error) {
+	handler, err := vm.vm.NewHTTPHandler(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if handler == nil {
+		return &vmpb.NewHTTPHandlerResponse{}, nil
+	}
+
+	serverListener, err := grpcutils.NewListener()
+	if err != nil {
+		return nil, err
+	}
+	server := grpcutils.NewServer()
+	vm.serverCloser.Add(server)
+	httppb.RegisterHTTPServer(server, ghttp.NewServer(handler))
+
+	// Start HTTP service
+	go grpcutils.Serve(serverListener, server)
+
+	return &vmpb.NewHTTPHandlerResponse{
+		ServerAddr: serverListener.Addr().String(),
+	}, nil
+}
+
+func (vm *VMServer) WaitForEvent(ctx context.Context, _ *emptypb.Empty) (*vmpb.WaitForEventResponse, error) {
+	message, err := vm.vm.WaitForEvent(ctx)
+	if err != nil {
+		vm.log.Debug("Received error while waiting for event", zap.Error(err))
+	}
+	return &vmpb.WaitForEventResponse{
+		Message: vmpb.Message(message),
+	}, err
 }
 
 func (vm *VMServer) Connected(ctx context.Context, req *vmpb.ConnectedRequest) (*emptypb.Empty, error) {
@@ -861,6 +885,10 @@ func convertNetworkUpgrades(pbUpgrades *vmpb.NetworkUpgrades) (upgrade.Config, e
 	if err != nil {
 		return upgrade.Config{}, err
 	}
+	cortinaXChainStopVertexID, err := ids.ToID(pbUpgrades.CortinaXChainStopVertexId)
+	if err != nil {
+		return upgrade.Config{}, err
+	}
 	durango, err := grpcutils.TimestampAsTime(pbUpgrades.DurangoTime)
 	if err != nil {
 		return upgrade.Config{}, err
@@ -877,8 +905,8 @@ func convertNetworkUpgrades(pbUpgrades *vmpb.NetworkUpgrades) (upgrade.Config, e
 	if err != nil {
 		return upgrade.Config{}, err
 	}
-
-	cortinaXChainStopVertexID, err := ids.ToID(pbUpgrades.CortinaXChainStopVertexId)
+	graniteEpochDuration := pbUpgrades.GraniteEpochDuration.AsDuration()
+	helicon, err := grpcutils.TimestampAsTime(pbUpgrades.HeliconTime)
 	if err != nil {
 		return upgrade.Config{}, err
 	}
@@ -900,5 +928,7 @@ func convertNetworkUpgrades(pbUpgrades *vmpb.NetworkUpgrades) (upgrade.Config, e
 		EtnaTime:                     etna,
 		FortunaTime:                  fortuna,
 		GraniteTime:                  granite,
+		GraniteEpochDuration:         graniteEpochDuration,
+		HeliconTime:                  helicon,
 	}, nil
 }

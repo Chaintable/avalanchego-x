@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package p2ptest
@@ -59,7 +59,12 @@ func NewClientWithPeers(
 	peerNetworks := make(map[ids.NodeID]*p2p.Network)
 	for nodeID := range peers {
 		peerSenders[nodeID] = &enginetest.Sender{}
-		peerNetwork, err := p2p.NewNetwork(logging.NoLog{}, peerSenders[nodeID], prometheus.NewRegistry(), "")
+		peerNetwork, err := p2p.NewNetwork(
+			logging.NoLog{},
+			peerSenders[nodeID],
+			prometheus.NewRegistry(),
+			"",
+		)
 		require.NoError(t, err)
 		peerNetworks[nodeID] = peerNetwork
 	}
@@ -69,7 +74,7 @@ func NewClientWithPeers(
 		// sends the response back to the client
 		for nodeID := range sendConfig.NodeIDs {
 			go func() {
-				require.NoError(t, peerNetworks[nodeID].AppGossip(ctx, nodeID, gossipBytes))
+				_ = peerNetworks[nodeID].AppGossip(ctx, nodeID, gossipBytes)
 			}()
 		}
 
@@ -86,7 +91,7 @@ func NewClientWithPeers(
 			// Send the request asynchronously to avoid deadlock when the server
 			// sends the response back to the client
 			go func() {
-				require.NoError(t, network.AppRequest(ctx, clientNodeID, requestID, time.Time{}, requestBytes))
+				_ = network.AppRequest(ctx, clientNodeID, requestID, time.Time{}, requestBytes)
 			}()
 		}
 
@@ -98,7 +103,7 @@ func NewClientWithPeers(
 			// Send the request asynchronously to avoid deadlock when the server
 			// sends the response back to the client
 			go func() {
-				require.NoError(t, peerNetworks[clientNodeID].AppResponse(ctx, nodeID, requestID, responseBytes))
+				_ = peerNetworks[clientNodeID].AppResponse(ctx, nodeID, requestID, responseBytes)
 			}()
 
 			return nil
@@ -108,10 +113,10 @@ func NewClientWithPeers(
 	for nodeID := range peers {
 		peerSenders[nodeID].SendAppErrorF = func(ctx context.Context, _ ids.NodeID, requestID uint32, errorCode int32, errorMessage string) error {
 			go func() {
-				require.NoError(t, peerNetworks[clientNodeID].AppRequestFailed(ctx, nodeID, requestID, &common.AppError{
+				_ = peerNetworks[clientNodeID].AppRequestFailed(ctx, nodeID, requestID, &common.AppError{
 					Code:    errorCode,
 					Message: errorMessage,
-				}))
+				})
 			}()
 
 			return nil
@@ -124,5 +129,10 @@ func NewClientWithPeers(
 		require.NoError(t, peerNetworks[nodeID].AddHandler(0, peers[nodeID]))
 	}
 
-	return peerNetworks[clientNodeID].NewClient(0)
+	peerSampler := p2p.PeerSampler{Peers: &p2p.Peers{}}
+	for nodeID := range peers {
+		peerSampler.Peers.Connected(nodeID)
+	}
+
+	return peerNetworks[clientNodeID].NewClient(0, peerSampler)
 }

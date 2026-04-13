@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package health
@@ -125,7 +125,7 @@ func TestPassingChecks(t *testing.T) {
 	require.NoError(h.RegisterHealthCheck("check", check))
 	require.NoError(h.RegisterLivenessCheck("check", check))
 
-	h.Start(context.Background(), checkFreq)
+	h.Start(t.Context(), checkFreq)
 	defer h.Stop()
 
 	{
@@ -136,7 +136,7 @@ func TestPassingChecks(t *testing.T) {
 		require.Contains(readinessResult, "check")
 
 		result := readinessResult["check"]
-		require.Equal("", result.Details)
+		require.Empty(result.Details)
 		require.Nil(result.Error)
 		require.Zero(result.ContiguousFailures)
 		require.True(readiness)
@@ -150,7 +150,7 @@ func TestPassingChecks(t *testing.T) {
 		require.Contains(healthResult, "check")
 
 		result := healthResult["check"]
-		require.Equal("", result.Details)
+		require.Empty(result.Details)
 		require.Nil(result.Error)
 		require.Zero(result.ContiguousFailures)
 		require.True(health)
@@ -164,7 +164,7 @@ func TestPassingChecks(t *testing.T) {
 		require.Contains(livenessResult, "check")
 
 		result := livenessResult["check"]
-		require.Equal("", result.Details)
+		require.Empty(result.Details)
 		require.Nil(result.Error)
 		require.Zero(result.ContiguousFailures)
 		require.True(liveness)
@@ -189,7 +189,7 @@ func TestPassingThenFailingChecks(t *testing.T) {
 	require.NoError(h.RegisterHealthCheck("check", check))
 	require.NoError(h.RegisterLivenessCheck("check", check))
 
-	h.Start(context.Background(), checkFreq)
+	h.Start(t.Context(), checkFreq)
 	defer h.Stop()
 
 	awaitReadiness(t, h, true)
@@ -240,7 +240,7 @@ func TestDeadlockRegression(t *testing.T) {
 		return "", nil
 	})
 
-	h.Start(context.Background(), time.Nanosecond)
+	h.Start(t.Context(), time.Nanosecond)
 	defer h.Stop()
 
 	for i := 0; i < 100; i++ {
@@ -307,7 +307,7 @@ func TestTags(t *testing.T) {
 		require.False(health)
 	}
 
-	h.Start(context.Background(), checkFreq)
+	h.Start(t.Context(), checkFreq)
 
 	awaitHealthy(t, h, true)
 

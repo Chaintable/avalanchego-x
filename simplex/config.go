@@ -1,0 +1,54 @@
+// Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
+// See the file LICENSE for licensing terms.
+
+package simplex
+
+import (
+	"github.com/ava-labs/simplex"
+
+	"github.com/ava-labs/avalanchego/database"
+	"github.com/ava-labs/avalanchego/ids"
+	"github.com/ava-labs/avalanchego/message"
+	"github.com/ava-labs/avalanchego/snow/engine/snowman/block"
+	"github.com/ava-labs/avalanchego/snow/networking/sender"
+	"github.com/ava-labs/avalanchego/utils/logging"
+
+	simplexparams "github.com/ava-labs/avalanchego/snow/consensus/simplex"
+)
+
+// Config wraps all the parameters needed for a simplex engine
+type Config struct {
+	Ctx SimplexChainContext
+	Log logging.Logger
+
+	Sender             sender.ExternalSender
+	OutboundMsgBuilder message.OutboundMsgBuilder
+
+	VM block.ChainVM
+
+	DB database.KeyValueReaderWriter
+
+	// In the case of a crash, Simplex uses the WAL to recover its state and resume consensus.
+	WAL simplex.WriteAheadLog
+
+	// SignBLS is the signing function used for this node to sign messages.
+	SignBLS SignFunc
+
+	// Parameters passed in by the subnet configuration
+	Params *simplexparams.Parameters
+}
+
+// Context is information about the current execution.
+type SimplexChainContext struct {
+	// NodeID is the ID of this node
+	NodeID ids.NodeID
+
+	// ChainID is the ID of the chain this context exists within.
+	ChainID ids.ID
+
+	// SubnetID is the ID of the subnet this context exists within.
+	SubnetID ids.ID
+
+	// Network is the ID of the network this context exists within.
+	NetworkID uint32
+}

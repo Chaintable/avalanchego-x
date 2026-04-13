@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package snowtest
@@ -16,6 +16,7 @@ import (
 	"github.com/ava-labs/avalanchego/database/memdb"
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/snow"
+	"github.com/ava-labs/avalanchego/snow/validators"
 	"github.com/ava-labs/avalanchego/snow/validators/validatorstest"
 	"github.com/ava-labs/avalanchego/upgrade/upgradetest"
 	"github.com/ava-labs/avalanchego/utils/constants"
@@ -74,6 +75,9 @@ func Context(tb testing.TB, chainID ids.ID) *snow.Context {
 		GetMinimumHeightF: func(context.Context) (uint64, error) {
 			return 0, nil
 		},
+		GetCurrentHeightF: func(context.Context) (uint64, error) {
+			return 0, nil
+		},
 		GetSubnetIDF: func(_ context.Context, chainID ids.ID) (ids.ID, error) {
 			switch chainID {
 			case PChainID, XChainID, CChainID:
@@ -81,6 +85,9 @@ func Context(tb testing.TB, chainID ids.ID) *snow.Context {
 			default:
 				return ids.Empty, errMissing
 			}
+		},
+		GetValidatorSetF: func(context.Context, uint64, ids.ID) (map[ids.NodeID]*validators.GetValidatorOutput, error) {
+			return map[ids.NodeID]*validators.GetValidatorOutput{}, nil
 		},
 	}
 

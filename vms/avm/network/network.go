@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package network
@@ -16,7 +16,7 @@ import (
 	"github.com/ava-labs/avalanchego/snow/validators"
 	"github.com/ava-labs/avalanchego/utils/logging"
 	"github.com/ava-labs/avalanchego/vms/avm/txs"
-	"github.com/ava-labs/avalanchego/vms/avm/txs/mempool"
+	"github.com/ava-labs/avalanchego/vms/txs/mempool"
 )
 
 var (
@@ -43,31 +43,25 @@ func New(
 	vdrs validators.State,
 	parser txs.Parser,
 	txVerifier TxVerifier,
-	mempool mempool.Mempool,
+	mempool mempool.Mempool[*txs.Tx],
 	appSender common.AppSender,
 	registerer prometheus.Registerer,
 	config Config,
 ) (*Network, error) {
-	p2pNetwork, err := p2p.NewNetwork(log, appSender, registerer, "p2p")
-	if err != nil {
-		return nil, err
-	}
-
-	marshaller := &txParser{
-		parser: parser,
-	}
 	validators := p2p.NewValidators(
-		p2pNetwork.Peers,
 		log,
 		subnetID,
 		vdrs,
 		config.MaxValidatorSetStaleness,
 	)
-	txGossipClient := p2pNetwork.NewClient(
-		p2p.TxGossipHandlerID,
-		p2p.WithValidatorSampling(validators),
+
+	p2pNetwork, err := p2p.NewNetwork(
+		log,
+		appSender,
+		registerer,
+		"p2p",
+		validators,
 	)
-	txGossipMetrics, err := gossip.NewMetrics(registerer, "tx")
 	if err != nil {
 		return nil, err
 	}
@@ -85,74 +79,38 @@ func New(
 		return nil, err
 	}
 
-	txPushGossiper, err := gossip.NewPushGossiper[*txs.Tx](
-		marshaller,
-		gossipMempool,
+	handler, pullGossiper, pushGossiper, err := gossip.NewSystem(
+		nodeID,
+		p2pNetwork,
 		validators,
-		txGossipClient,
-		txGossipMetrics,
-		gossip.BranchingFactor{
-			StakePercentage: config.PushGossipPercentStake,
-			Validators:      config.PushGossipNumValidators,
-			Peers:           config.PushGossipNumPeers,
+		gossipMempool,
+		&txParser{
+			parser: parser,
 		},
-		gossip.BranchingFactor{
-			Validators: config.PushRegossipNumValidators,
-			Peers:      config.PushRegossipNumPeers,
+		gossip.SystemConfig{
+			Log:               log,
+			Registry:          registerer,
+			Namespace:         "tx_gossip",
+			TargetMessageSize: config.TargetGossipSize,
+			ThrottlingPeriod:  config.PullGossipThrottlingPeriod,
+			RequestPeriod:     config.PullGossipFrequency,
+			PushGossipParams: gossip.BranchingFactor{
+				StakePercentage: config.PushGossipPercentStake,
+				Validators:      config.PushGossipNumValidators,
+				Peers:           config.PushGossipNumPeers,
+			},
+			PushRegossipParams: gossip.BranchingFactor{
+				Validators: config.PushRegossipNumValidators,
+				Peers:      config.PushRegossipNumPeers,
+			},
+			DiscardedPushCacheSize: config.PushGossipDiscardedCacheSize,
+			RegossipPeriod:         config.PushGossipMaxRegossipFrequency,
 		},
-		config.PushGossipDiscardedCacheSize,
-		config.TargetGossipSize,
-		config.PushGossipMaxRegossipFrequency,
 	)
 	if err != nil {
 		return nil, err
 	}
-
-	var txPullGossiper gossip.Gossiper = gossip.NewPullGossiper[*txs.Tx](
-		log,
-		marshaller,
-		gossipMempool,
-		txGossipClient,
-		txGossipMetrics,
-		config.PullGossipPollSize,
-	)
-
-	// Gossip requests are only served if a node is a validator
-	txPullGossiper = gossip.ValidatorGossiper{
-		Gossiper:   txPullGossiper,
-		NodeID:     nodeID,
-		Validators: validators,
-	}
-
-	handler := gossip.NewHandler[*txs.Tx](
-		log,
-		marshaller,
-		gossipMempool,
-		txGossipMetrics,
-		config.TargetGossipSize,
-	)
-
-	validatorHandler := p2p.NewValidatorHandler(
-		p2p.NewThrottlerHandler(
-			handler,
-			p2p.NewSlidingWindowThrottler(
-				config.PullGossipThrottlingPeriod,
-				config.PullGossipThrottlingLimit,
-			),
-			log,
-		),
-		validators,
-		log,
-	)
-
-	// We allow pushing txs between all peers, but only serve gossip requests
-	// from validators
-	txGossipHandler := txGossipHandler{
-		appGossipHandler:  handler,
-		appRequestHandler: validatorHandler,
-	}
-
-	if err := p2pNetwork.AddHandler(p2p.TxGossipHandlerID, txGossipHandler); err != nil {
+	if err := p2pNetwork.AddHandler(p2p.TxGossipHandlerID, handler); err != nil {
 		return nil, err
 	}
 
@@ -160,9 +118,9 @@ func New(
 		Network:               p2pNetwork,
 		log:                   log,
 		mempool:               gossipMempool,
-		txPushGossiper:        txPushGossiper,
+		txPushGossiper:        pushGossiper,
 		txPushGossipFrequency: config.PushGossipFrequency,
-		txPullGossiper:        txPullGossiper,
+		txPullGossiper:        pullGossiper,
 		txPullGossipFrequency: config.PullGossipFrequency,
 	}, nil
 }

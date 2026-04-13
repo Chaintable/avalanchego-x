@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package e2e
@@ -8,17 +8,16 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-	"net/netip"
 	"os"
 	"strings"
 	"time"
 
-	"github.com/ava-labs/coreth/ethclient"
 	"github.com/ava-labs/libevm/core/types"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
 	"github.com/ava-labs/avalanchego/config"
+	"github.com/ava-labs/avalanchego/graft/coreth/ethclient"
 	"github.com/ava-labs/avalanchego/tests"
 	"github.com/ava-labs/avalanchego/tests/fixture/tmpnet"
 	"github.com/ava-labs/avalanchego/utils/crypto/secp256k1"
@@ -210,7 +209,7 @@ func SuggestGasPrice(tc tests.TestContext, ethClient *ethclient.Client) *big.Int
 
 	// Double the suggested gas price to maximize the chances of
 	// acceptance. Maybe this can be revisited pending resolution of
-	// https://github.com/ava-labs/coreth/issues/314.
+	// https://github.com/ava-labs/avalanchego/graft/coreth/issues/314.
 	gasPrice.Add(gasPrice, gasPrice)
 	return gasPrice
 }
@@ -281,8 +280,16 @@ func StartNetwork(
 ) {
 	require := require.New(tc)
 
-	err := tmpnet.BootstrapNewNetwork(
-		tc.DefaultContext(),
+	nodeCount := len(network.Nodes)
+	timeout, err := network.DefaultRuntimeConfig.GetNetworkStartTimeout(nodeCount)
+	require.NoError(err)
+	tc.Log().Info("waiting for network to start",
+		zap.Float64("timeoutSeconds", timeout.Seconds()),
+	)
+	ctx := tc.ContextWithTimeout(timeout)
+
+	err = tmpnet.BootstrapNewNetwork(
+		ctx,
 		tc.Log(),
 		network,
 		rootNetworkDir,
@@ -368,27 +375,4 @@ func GetRepoRootPath(suffix string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSuffix(cwd, suffix), nil
-}
-
-// GetLocalURI retrieves the locally-accessible URI of the provided node. When a node
-// is running as a local process, this will be the URI exposed by the node. For a
-// node running remotely in kube, the URI will be a local address whose port is
-// forwarded to the node's URI through the kube API server.
-func GetLocalURI(tc tests.TestContext, node *tmpnet.Node) string {
-	uri, cancel, err := node.GetLocalURI(tc.DefaultContext())
-	require.NoError(tc, err)
-	tc.DeferCleanup(cancel)
-	return uri
-}
-
-// GetLocalStakingAddress retrieves the locally-accessible staking address of the
-// provided node. When a node is a local process, this will be the staking address
-// exposed by the node. For a node running remotely in kube, the staking address will
-// be a local address whose port will be forwarded to the node's staking address
-// through the kube API server.
-func GetLocalStakingAddress(tc tests.TestContext, node *tmpnet.Node) netip.AddrPort {
-	stakingAddress, cancel, err := node.GetLocalStakingAddress(tc.DefaultContext())
-	require.NoError(tc, err)
-	tc.DeferCleanup(cancel)
-	return stakingAddress
 }

@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package merkledb
@@ -6,7 +6,9 @@ package merkledb
 import (
 	"context"
 	"encoding/binary"
+	"math/rand"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -85,7 +87,7 @@ func Test_HashChangedNodes(t *testing.T) {
 	for _, test := range hashChangedNodesTests {
 		t.Run(test.name, func(t *testing.T) {
 			view := makeViewForHashChangedNodes(t, test.numKeys, 16)
-			ctx := context.Background()
+			ctx := t.Context()
 			view.hashChangedNodes(ctx)
 			require.Equal(t, test.expectedRootHash, view.changes.rootID.String())
 		})
@@ -95,11 +97,53 @@ func Test_HashChangedNodes(t *testing.T) {
 func Benchmark_HashChangedNodes(b *testing.B) {
 	for _, test := range hashChangedNodesTests {
 		view := makeViewForHashChangedNodes(b, test.numKeys, 1)
-		ctx := context.Background()
+		ctx := b.Context()
 		b.Run(test.name, func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				view.hashChangedNodes(ctx)
 			}
 		})
+	}
+}
+
+func BenchmarkView_NewIteratorWithStartAndPrefix(b *testing.B) {
+	var (
+		keyMaxLen = 20
+		numKeys   = uint64(1_000_000)
+	)
+
+	rand := rand.New(rand.NewSource(time.Now().Unix()))
+
+	db, err := getBasicDB()
+	require.NoError(b, err)
+
+	ops := make([]database.BatchOp, 0, numKeys)
+	for range numKeys {
+		key := make([]byte, rand.Intn(keyMaxLen))
+		rand.Read(key)
+
+		value := make([]byte, rand.Intn(keyMaxLen))
+		rand.Read(value)
+
+		ops = append(ops, database.BatchOp{
+			Key:   key,
+			Value: value,
+		})
+	}
+
+	ctx := b.Context()
+	view, err := db.NewView(ctx, ViewChanges{BatchOps: ops})
+	require.NoError(b, err)
+
+	for range b.N {
+		b.StopTimer()
+		start := make([]byte, rand.Intn(keyMaxLen))
+		rand.Read(start)
+
+		prefix := make([]byte, rand.Intn(keyMaxLen/2))
+		rand.Read(prefix)
+
+		b.StartTimer()
+		view.NewIteratorWithStartAndPrefix(start, prefix)
 	}
 }

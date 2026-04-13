@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package avm
@@ -68,7 +68,6 @@ type environment struct {
 	genesisBytes []byte
 	genesisTx    *txs.Tx
 	sharedMemory *atomic.Memory
-	issuer       chan common.Message
 	vm           *VM
 	txBuilder    *txstest.Builder
 }
@@ -125,11 +124,10 @@ func setup(tb testing.TB, c *envConfig) *environment {
 	require.NoError(err)
 
 	require.NoError(vm.Initialize(
-		context.Background(),
+		tb.Context(),
 		ctx,
 		prefixdb.New([]byte{1}, baseDB),
 		genesisBytes,
-		nil,
 		configBytes,
 		nil,
 		append(
@@ -149,33 +147,32 @@ func setup(tb testing.TB, c *envConfig) *environment {
 	))
 
 	stopVertexID := ids.GenerateTestID()
-	issuer := make(chan common.Message, 1)
 
 	env := &environment{
 		genesisBytes: genesisBytes,
 		genesisTx:    getCreateTxFromGenesisTest(tb, genesisBytes, assetName),
 		sharedMemory: m,
-		issuer:       issuer,
 		vm:           vm,
 		txBuilder:    txstest.New(vm.parser.Codec(), vm.ctx, &vm.Config, vm.feeAssetID, vm.state),
 	}
 
-	require.NoError(vm.SetState(context.Background(), snow.Bootstrapping))
+	require.NoError(vm.SetState(tb.Context(), snow.Bootstrapping))
 	if c.notLinearized {
 		return env
 	}
 
-	require.NoError(vm.Linearize(context.Background(), stopVertexID, issuer))
+	require.NoError(vm.Linearize(tb.Context(), stopVertexID))
 	if c.notBootstrapped {
 		return env
 	}
 
-	require.NoError(vm.SetState(context.Background(), snow.NormalOp))
+	require.NoError(vm.SetState(tb.Context(), snow.NormalOp))
 
 	tb.Cleanup(func() {
 		env.vm.ctx.Lock.Lock()
 		defer env.vm.ctx.Lock.Unlock()
 
+		//nolint:usetesting // t.Context() is already canceled inside the cleanup function
 		require.NoError(env.vm.Shutdown(context.Background()))
 	})
 
@@ -410,24 +407,24 @@ func makeCustomAssetGenesisData(tb testing.TB) map[string]AssetDefinition {
 func issueAndAccept(
 	require *require.Assertions,
 	vm *VM,
-	issuer <-chan common.Message,
 	tx *txs.Tx,
 ) {
 	txID, err := vm.issueTxFromRPC(tx)
 	require.NoError(err)
 	require.Equal(tx.ID(), txID)
 
-	buildAndAccept(require, vm, issuer, txID)
+	buildAndAccept(require, vm, txID)
 }
 
 // buildAndAccept expects the context lock not to be held
 func buildAndAccept(
 	require *require.Assertions,
 	vm *VM,
-	issuer <-chan common.Message,
 	txID ids.ID,
 ) {
-	require.Equal(common.PendingTxs, <-issuer)
+	msg, err := vm.WaitForEvent(context.Background())
+	require.NoError(err)
+	require.Equal(common.PendingTxs, msg)
 
 	vm.ctx.Lock.Lock()
 	defer vm.ctx.Lock.Unlock()

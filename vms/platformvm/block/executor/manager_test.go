@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package executor
@@ -7,21 +7,21 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"go.uber.org/mock/gomock"
 
 	"github.com/ava-labs/avalanchego/database"
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/vms/platformvm/block"
-	"github.com/ava-labs/avalanchego/vms/platformvm/state"
+	"github.com/ava-labs/avalanchego/vms/platformvm/state/statetest"
+
+	snowmanblock "github.com/ava-labs/avalanchego/snow/engine/snowman/block"
 )
 
 func TestGetBlock(t *testing.T) {
 	require := require.New(t)
-	ctrl := gomock.NewController(t)
 
 	statelessBlk, err := block.NewApricotCommitBlock(ids.GenerateTestID() /*parent*/, 2 /*height*/)
 	require.NoError(err)
-	state := state.NewMockState(ctrl)
+	state := statetest.New(t, statetest.Config{})
 	manager := &manager{
 		backend: &backend{
 			state:        state,
@@ -31,13 +31,12 @@ func TestGetBlock(t *testing.T) {
 
 	{
 		// Case: block isn't in memory or database
-		state.EXPECT().GetStatelessBlock(statelessBlk.ID()).Return(nil, database.ErrNotFound).Times(1)
 		_, err := manager.GetBlock(statelessBlk.ID())
 		require.ErrorIs(err, database.ErrNotFound)
 	}
 	{
 		// Case: block isn't in memory but is in database.
-		state.EXPECT().GetStatelessBlock(statelessBlk.ID()).Return(statelessBlk, nil).Times(1)
+		state.AddStatelessBlock(statelessBlk)
 		gotBlk, err := manager.GetBlock(statelessBlk.ID())
 		require.NoError(err)
 		require.Equal(statelessBlk.ID(), gotBlk.ID())
@@ -79,10 +78,28 @@ func TestManagerSetPreference(t *testing.T) {
 	manager := &manager{
 		preferred: initialPreference,
 	}
-	require.False(manager.SetPreference(initialPreference))
+	require.Equal(initialPreference, manager.Preferred())
 
 	newPreference := ids.GenerateTestID()
-	require.True(manager.SetPreference(newPreference))
-	require.False(manager.SetPreference(newPreference))
-	require.True(manager.SetPreference(initialPreference))
+	manager.SetPreference(newPreference, nil)
+	require.Equal(newPreference, manager.Preferred())
+}
+
+func TestManagerSetPreferenceWithContext(t *testing.T) {
+	require := require.New(t)
+
+	initialPreference := ids.GenerateTestID()
+	manager := &manager{
+		preferred: initialPreference,
+	}
+	require.Equal(initialPreference, manager.Preferred())
+	require.Nil(manager.preferredCtx)
+
+	newPreference := ids.GenerateTestID()
+	newContext := &snowmanblock.Context{
+		PChainHeight: 100,
+	}
+	manager.SetPreference(newPreference, newContext)
+	require.Equal(newPreference, manager.Preferred())
+	require.Equal(newContext, manager.preferredCtx)
 }

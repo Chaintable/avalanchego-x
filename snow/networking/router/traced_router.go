@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package router
@@ -69,7 +69,7 @@ func (r *tracedRouter) RegisterRequest(
 	chainID ids.ID,
 	requestID uint32,
 	op message.Op,
-	failedMsg message.InboundMessage,
+	failedMsg *message.InboundMessage,
 	engineType p2p.EngineType,
 ) {
 	r.router.RegisterRequest(
@@ -83,8 +83,8 @@ func (r *tracedRouter) RegisterRequest(
 	)
 }
 
-func (r *tracedRouter) HandleInbound(ctx context.Context, msg message.InboundMessage) {
-	m := msg.Message()
+func (r *tracedRouter) HandleInbound(ctx context.Context, msg *message.InboundMessage) {
+	m := msg.Message
 	chainID, err := message.GetChainID(m)
 	if err != nil {
 		r.router.HandleInbound(ctx, msg)
@@ -92,13 +92,31 @@ func (r *tracedRouter) HandleInbound(ctx context.Context, msg message.InboundMes
 	}
 
 	ctx, span := r.tracer.Start(ctx, "tracedRouter.HandleInbound", oteltrace.WithAttributes(
-		attribute.Stringer("nodeID", msg.NodeID()),
-		attribute.Stringer("messageOp", msg.Op()),
+		attribute.Stringer("nodeID", msg.NodeID),
+		attribute.Stringer("messageOp", msg.Op),
 		attribute.Stringer("chainID", chainID),
 	))
 	defer span.End()
 
 	r.router.HandleInbound(ctx, msg)
+}
+
+func (r *tracedRouter) HandleInternal(ctx context.Context, msg *message.InboundMessage) {
+	m := msg.Message
+	chainID, err := message.GetChainID(m)
+	if err != nil {
+		r.router.HandleInternal(ctx, msg)
+		return
+	}
+
+	ctx, span := r.tracer.Start(ctx, "tracedRouter.HandleInternal", oteltrace.WithAttributes(
+		attribute.Stringer("nodeID", msg.NodeID),
+		attribute.Stringer("messageOp", msg.Op),
+		attribute.Stringer("chainID", chainID),
+	))
+	defer span.End()
+
+	r.router.HandleInternal(ctx, msg)
 }
 
 func (r *tracedRouter) Shutdown(ctx context.Context) {

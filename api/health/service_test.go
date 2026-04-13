@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package health
@@ -64,7 +64,7 @@ func TestServiceResponses(t *testing.T) {
 		require.False(reply.Healthy)
 	}
 
-	h.Start(context.Background(), checkFreq)
+	h.Start(t.Context(), checkFreq)
 	defer h.Stop()
 
 	awaitReadiness(t, h, true)
@@ -76,7 +76,7 @@ func TestServiceResponses(t *testing.T) {
 		require.NoError(s.Readiness(nil, &APIArgs{}, &reply))
 
 		result := reply.Checks["check"]
-		require.Equal("", result.Details)
+		require.Empty(result.Details)
 		require.Nil(result.Error)
 		require.Zero(result.ContiguousFailures)
 		require.True(reply.Healthy)
@@ -87,7 +87,7 @@ func TestServiceResponses(t *testing.T) {
 		require.NoError(s.Health(nil, &APIArgs{}, &reply))
 
 		result := reply.Checks["check"]
-		require.Equal("", result.Details)
+		require.Empty(result.Details)
 		require.Nil(result.Error)
 		require.Zero(result.ContiguousFailures)
 		require.True(reply.Healthy)
@@ -98,7 +98,7 @@ func TestServiceResponses(t *testing.T) {
 		require.NoError(s.Liveness(nil, &APIArgs{}, &reply))
 
 		result := reply.Checks["check"]
-		require.Equal("", result.Details)
+		require.Empty(result.Details)
 		require.Nil(result.Error)
 		require.Zero(result.ContiguousFailures)
 		require.True(reply.Healthy)
@@ -190,7 +190,7 @@ func TestServiceTagResponse(t *testing.T) {
 				require.False(reply.Healthy)
 			}
 
-			h.Start(context.Background(), checkFreq)
+			h.Start(t.Context(), checkFreq)
 
 			test.await(t, h, true)
 

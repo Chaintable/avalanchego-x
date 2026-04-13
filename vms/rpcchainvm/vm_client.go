@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package rpcchainvm
@@ -15,6 +15,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/ava-labs/avalanchego/api/metrics"
@@ -29,7 +30,9 @@ import (
 	"github.com/ava-labs/avalanchego/snow/engine/common/appsender"
 	"github.com/ava-labs/avalanchego/snow/engine/snowman/block"
 	"github.com/ava-labs/avalanchego/snow/validators/gvalidators"
+	"github.com/ava-labs/avalanchego/upgrade"
 	"github.com/ava-labs/avalanchego/utils/crypto/bls"
+	"github.com/ava-labs/avalanchego/utils/logging"
 	"github.com/ava-labs/avalanchego/utils/resource"
 	"github.com/ava-labs/avalanchego/utils/units"
 	"github.com/ava-labs/avalanchego/utils/wrappers"
@@ -38,13 +41,11 @@ import (
 	"github.com/ava-labs/avalanchego/vms/platformvm/warp/gwarp"
 	"github.com/ava-labs/avalanchego/vms/rpcchainvm/ghttp"
 	"github.com/ava-labs/avalanchego/vms/rpcchainvm/grpcutils"
-	"github.com/ava-labs/avalanchego/vms/rpcchainvm/messenger"
 	"github.com/ava-labs/avalanchego/vms/rpcchainvm/runtime"
 
 	aliasreaderpb "github.com/ava-labs/avalanchego/proto/pb/aliasreader"
 	appsenderpb "github.com/ava-labs/avalanchego/proto/pb/appsender"
 	httppb "github.com/ava-labs/avalanchego/proto/pb/http"
-	messengerpb "github.com/ava-labs/avalanchego/proto/pb/messenger"
 	rpcdbpb "github.com/ava-labs/avalanchego/proto/pb/rpcdb"
 	sharedmemorypb "github.com/ava-labs/avalanchego/proto/pb/sharedmemory"
 	validatorstatepb "github.com/ava-labs/avalanchego/proto/pb/validatorstate"
@@ -82,13 +83,13 @@ var (
 // VMClient is an implementation of a VM that talks over RPC.
 type VMClient struct {
 	*chain.State
+	logger          logging.Logger
 	client          vmpb.VMClient
 	runtime         runtime.Stopper
 	pid             int
 	processTracker  resource.ProcessTracker
 	metricsGatherer metrics.MultiGatherer
 
-	messenger            *messenger.Server
 	sharedMemory         *gsharedmemory.Server
 	bcLookup             *galiasreader.Server
 	appSender            *appsender.Server
@@ -108,6 +109,7 @@ func NewClient(
 	pid int,
 	processTracker resource.ProcessTracker,
 	metricsGatherer metrics.MultiGatherer,
+	logger logging.Logger,
 ) *VMClient {
 	return &VMClient{
 		client:          vmpb.NewVMClient(clientConn),
@@ -116,6 +118,7 @@ func NewClient(
 		processTracker:  processTracker,
 		metricsGatherer: metricsGatherer,
 		conns:           []*grpc.ClientConn{clientConn},
+		logger:          logger,
 	}
 }
 
@@ -126,7 +129,6 @@ func (vm *VMClient) Initialize(
 	genesisBytes []byte,
 	upgradeBytes []byte,
 	configBytes []byte,
-	toEngine chan<- common.Message,
 	fxs []*common.Fx,
 	appSender common.AppSender,
 ) error {
@@ -165,7 +167,6 @@ func (vm *VMClient) Initialize(
 		zap.String("address", dbServerAddr),
 	)
 
-	vm.messenger = messenger.NewServer(toEngine)
 	vm.sharedMemory = gsharedmemory.NewServer(chainCtx.SharedMemory, db)
 	vm.bcLookup = galiasreader.NewServer(chainCtx.BCLookup)
 	vm.appSender = appsender.NewServer(appSender)
@@ -183,24 +184,7 @@ func (vm *VMClient) Initialize(
 		zap.String("address", serverAddr),
 	)
 
-	networkUpgrades := &vmpb.NetworkUpgrades{
-		ApricotPhase_1Time:            grpcutils.TimestampFromTime(chainCtx.NetworkUpgrades.ApricotPhase1Time),
-		ApricotPhase_2Time:            grpcutils.TimestampFromTime(chainCtx.NetworkUpgrades.ApricotPhase2Time),
-		ApricotPhase_3Time:            grpcutils.TimestampFromTime(chainCtx.NetworkUpgrades.ApricotPhase3Time),
-		ApricotPhase_4Time:            grpcutils.TimestampFromTime(chainCtx.NetworkUpgrades.ApricotPhase4Time),
-		ApricotPhase_4MinPChainHeight: chainCtx.NetworkUpgrades.ApricotPhase4MinPChainHeight,
-		ApricotPhase_5Time:            grpcutils.TimestampFromTime(chainCtx.NetworkUpgrades.ApricotPhase5Time),
-		ApricotPhasePre_6Time:         grpcutils.TimestampFromTime(chainCtx.NetworkUpgrades.ApricotPhasePre6Time),
-		ApricotPhase_6Time:            grpcutils.TimestampFromTime(chainCtx.NetworkUpgrades.ApricotPhase6Time),
-		ApricotPhasePost_6Time:        grpcutils.TimestampFromTime(chainCtx.NetworkUpgrades.ApricotPhasePost6Time),
-		BanffTime:                     grpcutils.TimestampFromTime(chainCtx.NetworkUpgrades.BanffTime),
-		CortinaTime:                   grpcutils.TimestampFromTime(chainCtx.NetworkUpgrades.CortinaTime),
-		CortinaXChainStopVertexId:     chainCtx.NetworkUpgrades.CortinaXChainStopVertexID[:],
-		DurangoTime:                   grpcutils.TimestampFromTime(chainCtx.NetworkUpgrades.DurangoTime),
-		EtnaTime:                      grpcutils.TimestampFromTime(chainCtx.NetworkUpgrades.EtnaTime),
-		FortunaTime:                   grpcutils.TimestampFromTime(chainCtx.NetworkUpgrades.FortunaTime),
-		GraniteTime:                   grpcutils.TimestampFromTime(chainCtx.NetworkUpgrades.GraniteTime),
-	}
+	networkUpgrades := getNetworkUpgrades(chainCtx.NetworkUpgrades)
 
 	resp, err := vm.client.Initialize(ctx, &vmpb.InitializeRequest{
 		NetworkId:       chainCtx.NetworkID,
@@ -270,6 +254,29 @@ func (vm *VMClient) Initialize(
 	return err
 }
 
+func getNetworkUpgrades(u upgrade.Config) *vmpb.NetworkUpgrades {
+	return &vmpb.NetworkUpgrades{
+		ApricotPhase_1Time:            grpcutils.TimestampFromTime(u.ApricotPhase1Time),
+		ApricotPhase_2Time:            grpcutils.TimestampFromTime(u.ApricotPhase2Time),
+		ApricotPhase_3Time:            grpcutils.TimestampFromTime(u.ApricotPhase3Time),
+		ApricotPhase_4Time:            grpcutils.TimestampFromTime(u.ApricotPhase4Time),
+		ApricotPhase_4MinPChainHeight: u.ApricotPhase4MinPChainHeight,
+		ApricotPhase_5Time:            grpcutils.TimestampFromTime(u.ApricotPhase5Time),
+		ApricotPhasePre_6Time:         grpcutils.TimestampFromTime(u.ApricotPhasePre6Time),
+		ApricotPhase_6Time:            grpcutils.TimestampFromTime(u.ApricotPhase6Time),
+		ApricotPhasePost_6Time:        grpcutils.TimestampFromTime(u.ApricotPhasePost6Time),
+		BanffTime:                     grpcutils.TimestampFromTime(u.BanffTime),
+		CortinaTime:                   grpcutils.TimestampFromTime(u.CortinaTime),
+		CortinaXChainStopVertexId:     u.CortinaXChainStopVertexID[:],
+		DurangoTime:                   grpcutils.TimestampFromTime(u.DurangoTime),
+		EtnaTime:                      grpcutils.TimestampFromTime(u.EtnaTime),
+		FortunaTime:                   grpcutils.TimestampFromTime(u.FortunaTime),
+		GraniteTime:                   grpcutils.TimestampFromTime(u.GraniteTime),
+		GraniteEpochDuration:          durationpb.New(u.GraniteEpochDuration),
+		HeliconTime:                   grpcutils.TimestampFromTime(u.HeliconTime),
+	}
+}
+
 func (vm *VMClient) newDBServer(db database.Database) *grpc.Server {
 	server := grpcutils.NewServer(
 		grpcutils.WithUnaryInterceptor(vm.grpcServerMetrics.UnaryServerInterceptor()),
@@ -305,7 +312,6 @@ func (vm *VMClient) newInitServer() *grpc.Server {
 	vm.serverCloser.Add(server)
 
 	// Register services
-	messengerpb.RegisterMessengerServer(server, vm.messenger)
 	sharedmemorypb.RegisterSharedMemoryServer(server, vm.sharedMemory)
 	aliasreaderpb.RegisterAliasReaderServer(server, vm.bcLookup)
 	appsenderpb.RegisterAppSenderServer(server, vm.appSender)
@@ -384,9 +390,37 @@ func (vm *VMClient) CreateHandlers(ctx context.Context) (map[string]http.Handler
 		}
 
 		vm.conns = append(vm.conns, clientConn)
-		handlers[handler.Prefix] = ghttp.NewClient(httppb.NewHTTPClient(clientConn))
+		handlers[handler.Prefix] = ghttp.NewClient(httppb.NewHTTPClient(clientConn), vm.logger)
 	}
 	return handlers, nil
+}
+
+func (vm *VMClient) NewHTTPHandler(ctx context.Context) (http.Handler, error) {
+	resp, err := vm.client.NewHTTPHandler(ctx, &emptypb.Empty{})
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.ServerAddr == "" {
+		return nil, nil
+	}
+
+	clientConn, err := grpcutils.Dial(resp.ServerAddr)
+	if err != nil {
+		return nil, err
+	}
+
+	vm.conns = append(vm.conns, clientConn)
+	return ghttp.NewClient(httppb.NewHTTPClient(clientConn), vm.logger), nil
+}
+
+func (vm *VMClient) WaitForEvent(ctx context.Context) (common.Message, error) {
+	resp, err := vm.client.WaitForEvent(ctx, &emptypb.Empty{})
+	if err != nil {
+		vm.logger.Debug("failed to subscribe to events", zap.Error(err))
+		return 0, err
+	}
+	return common.Message(resp.Message), nil
 }
 
 func (vm *VMClient) Connected(ctx context.Context, nodeID ids.NodeID, nodeVersion *version.Application) error {

@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package chains
@@ -212,6 +212,7 @@ type ManagerConfig struct {
 	CriticalChains            set.Set[ids.ID] // Chains that can't exit gracefully
 	TimeoutManager            timeout.Manager // Manages request timeouts when sending messages to other validators
 	Health                    health.Registerer
+	ProposerMinBlockDelay     time.Duration
 	SubnetConfigs             map[ids.ID]subnets.Config // ID -> SubnetConfig
 	ChainConfigs              map[string]ChainConfig    // alias -> ChainConfig
 	// ShutdownNodeFunc allows the chain manager to issue a request to shutdown the node
@@ -615,7 +616,7 @@ func (m *manager) createAvalancheChain(
 	defer ctx.Lock.Unlock()
 
 	ctx.State.Set(snow.EngineState{
-		Type:  p2ppb.EngineType_ENGINE_TYPE_AVALANCHE,
+		Type:  p2ppb.EngineType_ENGINE_TYPE_DAG,
 		State: snow.Initializing,
 	})
 
@@ -664,7 +665,7 @@ func (m *manager) createAvalancheChain(
 		m.Net,
 		m.ManagerConfig.Router,
 		m.TimeoutManager,
-		p2ppb.EngineType_ENGINE_TYPE_AVALANCHE,
+		p2ppb.EngineType_ENGINE_TYPE_DAG,
 		sb,
 		avalancheMetrics,
 	)
@@ -683,7 +684,7 @@ func (m *manager) createAvalancheChain(
 		m.Net,
 		m.ManagerConfig.Router,
 		m.TimeoutManager,
-		p2ppb.EngineType_ENGINE_TYPE_SNOWMAN,
+		p2ppb.EngineType_ENGINE_TYPE_CHAIN,
 		sb,
 		ctx.Registerer,
 	)
@@ -727,10 +728,6 @@ func (m *manager) createAvalancheChain(
 		},
 	)
 
-	// The channel through which a VM may send messages to the consensus engine
-	// VM uses this channel to notify engine that a block is ready to be made
-	msgChan := make(chan common.Message, defaultChannelSize)
-
 	// The only difference between using avalancheMessageSender and
 	// snowmanMessageSender here is where the metrics will be placed. Because we
 	// end up using this sender after the linearization, we pass in
@@ -742,7 +739,6 @@ func (m *manager) createAvalancheChain(
 		genesisData,
 		chainConfig.Upgrade,
 		chainConfig.Config,
-		msgChan,
 		fxs,
 		snowmanMessageSender,
 	)
@@ -754,7 +750,7 @@ func (m *manager) createAvalancheChain(
 	var (
 		// A default subnet configuration will be present if explicit configuration is not provided
 		subnetCfg           = m.SubnetConfigs[ctx.SubnetID]
-		minBlockDelay       = subnetCfg.ProposerMinBlockDelay
+		minBlockDelay       = m.ProposerMinBlockDelay // X-chain uses this value
 		numHistoricalBlocks = subnetCfg.ProposerNumHistoricalBlocks
 	)
 	m.Log.Info("creating proposervm wrapper",
@@ -811,19 +807,25 @@ func (m *manager) createAvalancheChain(
 		vmWrappingProposerVM = tracedvm.NewBlockVM(vmWrappingProposerVM, "proposervm", m.Tracer)
 	}
 
+	cn := &block.ChangeNotifier{
+		ChainVM: vmWrappingProposerVM,
+	}
+
+	vmWrappingProposerVM = cn
+
 	// Note: linearizableVM is the VM that the Avalanche engines should be
 	// using.
 	linearizableVM := &initializeOnLinearizeVM{
-		DAGVM:          dagVM,
-		vmToInitialize: vmWrappingProposerVM,
-		vmToLinearize:  untracedVMWrappedInsideProposerVM,
+		waitForLinearize: make(chan struct{}),
+		DAGVM:            dagVM,
+		vmToInitialize:   vmWrappingProposerVM,
+		vmToLinearize:    untracedVMWrappedInsideProposerVM,
 
 		ctx:          ctx.Context,
 		db:           vmDB,
 		genesisBytes: genesisData,
 		upgradeBytes: chainConfig.Upgrade,
 		configBytes:  chainConfig.Config,
-		toEngine:     msgChan,
 		fxs:          fxs,
 		appSender:    snowmanMessageSender,
 	}
@@ -833,7 +835,15 @@ func (m *manager) createAvalancheChain(
 		return nil, fmt.Errorf("error while fetching weight for subnet %s: %w", ctx.SubnetID, err)
 	}
 
-	consensusParams := sb.Config().ConsensusParameters
+	// sanity check
+	if sb.Config().SnowParameters == nil {
+		msg := "snowball parameters not specified for subnet %s"
+		if sb.Config().SimplexParameters != nil {
+			msg += ", this chain is configured with simplex"
+		}
+		return nil, fmt.Errorf(msg, ctx.SubnetID)
+	}
+	consensusParams := *sb.Config().SnowParameters
 	sampleK := consensusParams.K
 	if uint64(sampleK) > bootstrapWeight {
 		sampleK = int(bootstrapWeight)
@@ -885,8 +895,9 @@ func (m *manager) createAvalancheChain(
 	// Asynchronously passes messages from the network to the consensus engine
 	h, err := handler.New(
 		ctx,
+		cn,
+		linearizableVM.WaitForEvent,
 		vdrs,
-		msgChan,
 		m.FrontierPollFrequency,
 		m.ConsensusAppConcurrency,
 		m.ResourceTracker,
@@ -1023,12 +1034,12 @@ func (m *manager) createAvalancheChain(
 	}
 
 	h.SetEngineManager(&handler.EngineManager{
-		Avalanche: &handler.Engine{
+		DAG: &handler.Engine{
 			StateSyncer:  nil,
 			Bootstrapper: avalancheBootstrapper,
 			Consensus:    avalancheEngine,
 		},
-		Snowman: &handler.Engine{
+		Chain: &handler.Engine{
 			StateSyncer:  nil,
 			Bootstrapper: snowmanBootstrapper,
 			Consensus:    snowmanEngine,
@@ -1062,7 +1073,7 @@ func (m *manager) createSnowmanChain(
 	defer ctx.Lock.Unlock()
 
 	ctx.State.Set(snow.EngineState{
-		Type:  p2ppb.EngineType_ENGINE_TYPE_SNOWMAN,
+		Type:  p2ppb.EngineType_ENGINE_TYPE_CHAIN,
 		State: snow.Initializing,
 	})
 
@@ -1091,7 +1102,7 @@ func (m *manager) createSnowmanChain(
 		m.Net,
 		m.ManagerConfig.Router,
 		m.TimeoutManager,
-		p2ppb.EngineType_ENGINE_TYPE_SNOWMAN,
+		p2ppb.EngineType_ENGINE_TYPE_CHAIN,
 		sb,
 		ctx.Registerer,
 	)
@@ -1113,6 +1124,10 @@ func (m *manager) createSnowmanChain(
 			return nil, fmt.Errorf("expected validators.State but got %T", vm)
 		}
 
+		// Wrap the validator state with a cached state so that P-chain lookups
+		// are cached.
+		valState = validators.NewCachedState(valState)
+
 		if m.TracingEnabled {
 			valState = validators.Trace(valState, "platformvm", m.Tracer)
 		}
@@ -1122,16 +1137,21 @@ func (m *manager) createSnowmanChain(
 		// P-chain.
 		ctx.ValidatorState = valState
 
-		// Initialize the validator state for future chains.
-		m.validatorState = validators.NewLockedState(&ctx.Lock, valState)
+		// Initialize validatorState for future chains.
+		valState = validators.NewLockedState(&ctx.Lock, valState)
 		if m.TracingEnabled {
-			m.validatorState = validators.Trace(m.validatorState, "lockedState", m.Tracer)
+			valState = validators.Trace(valState, "lockedState", m.Tracer)
 		}
 
+		// Wrap the validator state with a cached state so that the P-chain lock
+		// isn't grabbed when lookups are cached.
+		valState = validators.NewCachedState(valState)
+
 		if !m.ManagerConfig.SybilProtectionEnabled {
-			m.validatorState = validators.NewNoValidatorsState(m.validatorState)
+			valState = validators.NewNoValidatorsState(valState)
 			ctx.ValidatorState = validators.NewNoValidatorsState(ctx.ValidatorState)
 		}
+		m.validatorState = valState
 
 		// Set this func only for platform
 		//
@@ -1151,9 +1171,12 @@ func (m *manager) createSnowmanChain(
 	var (
 		// A default subnet configuration will be present if explicit configuration is not provided
 		subnetCfg           = m.SubnetConfigs[ctx.SubnetID]
-		minBlockDelay       = subnetCfg.ProposerMinBlockDelay
+		minBlockDelay       time.Duration // Most chains default to 0
 		numHistoricalBlocks = subnetCfg.ProposerNumHistoricalBlocks
 	)
+	if ctx.ChainID == constants.PlatformChainID {
+		minBlockDelay = m.ProposerMinBlockDelay
+	}
 	m.Log.Info("creating proposervm wrapper",
 		zap.Time("activationTime", m.Upgrades.ApricotPhase4Time),
 		zap.Uint64("minPChainHeight", m.Upgrades.ApricotPhase4MinPChainHeight),
@@ -1202,9 +1225,10 @@ func (m *manager) createSnowmanChain(
 		vm = tracedvm.NewBlockVM(vm, "proposervm", m.Tracer)
 	}
 
-	// The channel through which a VM may send messages to the consensus engine
-	// VM uses this channel to notify engine that a block is ready to be made
-	msgChan := make(chan common.Message, defaultChannelSize)
+	cn := &block.ChangeNotifier{
+		ChainVM: vm,
+	}
+	vm = cn
 
 	if err := vm.Initialize(
 		context.TODO(),
@@ -1213,7 +1237,6 @@ func (m *manager) createSnowmanChain(
 		genesisData,
 		chainConfig.Upgrade,
 		chainConfig.Config,
-		msgChan,
 		fxs,
 		messageSender,
 	); err != nil {
@@ -1225,7 +1248,15 @@ func (m *manager) createSnowmanChain(
 		return nil, fmt.Errorf("error while fetching weight for subnet %s: %w", ctx.SubnetID, err)
 	}
 
-	consensusParams := sb.Config().ConsensusParameters
+	// sanity check
+	if sb.Config().SnowParameters == nil {
+		msg := "snowball parameters not specified for subnet %s"
+		if sb.Config().SimplexParameters != nil {
+			msg += ", this chain is configured with simplex"
+		}
+		return nil, fmt.Errorf(msg, ctx.SubnetID)
+	}
+	consensusParams := *sb.Config().SnowParameters
 	sampleK := consensusParams.K
 	if uint64(sampleK) > bootstrapWeight {
 		sampleK = int(bootstrapWeight)
@@ -1277,8 +1308,9 @@ func (m *manager) createSnowmanChain(
 	// Asynchronously passes messages from the network to the consensus engine
 	h, err := handler.New(
 		ctx,
+		cn,
+		vm.WaitForEvent,
 		vdrs,
-		msgChan,
 		m.FrontierPollFrequency,
 		m.ConsensusAppConcurrency,
 		m.ResourceTracker,
@@ -1391,8 +1423,8 @@ func (m *manager) createSnowmanChain(
 	}
 
 	h.SetEngineManager(&handler.EngineManager{
-		Avalanche: nil,
-		Snowman: &handler.Engine{
+		DAG: nil,
+		Chain: &handler.Engine{
 			StateSyncer:  stateSyncer,
 			Bootstrapper: bootstrapper,
 			Consensus:    engine,
