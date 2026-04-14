@@ -102,11 +102,10 @@ func (p *StateProcessor) Process(block *types.Block, parent *types.Header, state
 		pipelineTracer = p
 	}
 
-	// TODO: enable once libevm is updated with OnCommit/OnLog fields
-	// if pipelineTracer != nil {
-	// 	statedb.OnCommit = pipelineTracer.OnCommit
-	// 	statedb.OnLog = pipelineTracer.OnLog
-	// }
+	if pipelineTracer != nil {
+		statedb.OnCommit = pipelineTracer.OnCommit
+		statedb.OnLog = pipelineTracer.OnLog
+	}
 
 	if beaconRoot := block.BeaconRoot(); beaconRoot != nil {
 		ProcessBeaconBlockRoot(*beaconRoot, vmenv, statedb)
@@ -124,8 +123,7 @@ func (p *StateProcessor) Process(block *types.Block, parent *types.Header, state
 		}
 		receipt, err := applyTransaction(msg, p.config, gp, statedb, blockNumber, blockHash, tx, usedGas, vmenv)
 		if pipelineTracer != nil {
-			// TODO: enable once libevm is updated with SetEffectiveGasPrice
-			// receipt.SetEffectiveGasPrice(tx, vmenv.Context.BaseFee)
+			receipt.SetEffectiveGasPrice(tx, vmenv.Context.BaseFee)
 			pipelineTracer.OnTxEnd(receipt, err)
 		}
 		if err != nil {

@@ -7,6 +7,8 @@ github.com/AndreasBriese/bbloom v0.0.0-20190306092124-e2d15f34fcf9/go.mod h1:bOv
 github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
 github.com/BurntSushi/toml v1.5.0 h1:W5quZX/G/csjUnuI8SUYlsHs9M38FC7znL0lIO+DvMg=
 github.com/BurntSushi/toml v1.5.0/go.mod h1:ukJfTF/6rtPPRCnwkur4qwRxa8vTRFBF0uk2lLoLwho=
+github.com/Chaintable/libevm v1.13.15-0.20251016142715-1bccf4f2ddb2-debank-1.0.20260414155142-cd81d0aad5bb h1:dJdAVWWWxMwJkADmxPlYRDFs15L+oklWU2eh65u+MGc=
+github.com/Chaintable/libevm v1.13.15-0.20251016142715-1bccf4f2ddb2-debank-1.0.20260414155142-cd81d0aad5bb/go.mod h1:DqSotSn4Dx/UJV+d3svfW8raR+cH7+Ohl9BpsQ5HlGU=
 github.com/Chaintable/pipeline v0.0.59-libevm-v1.13.15-debank-1 h1:SJRsikNMWXWIdTerqAPLd2PkTdN0G7c53zV8Z1ucAS8=
 github.com/Chaintable/pipeline v0.0.59-libevm-v1.13.15-debank-1/go.mod h1:zF8CsKN7zFnljDeWgbbv4+Tw6GS+wMx8nz71E+oAlhs=
 github.com/CloudyKit/fastprinter v0.0.0-20200109182630-33d98a066a53/go.mod h1:+3IMCy2vIlbG1XG/0ggNQv0SvxCAIpPM5b1nCz56Xno=
@@ -30,8 +32,6 @@ github.com/armon/go-socks5 v0.0.0-20160902184237-e75332964ef5 h1:0CwZNZbxp69SHPd
 github.com/armon/go-socks5 v0.0.0-20160902184237-e75332964ef5/go.mod h1:wHh0iHkYZB8zMSxRWpUBQtwG5a7fFgvEO+odwuTv2gs=
 github.com/ava-labs/firewood-go-ethhash/ffi v0.3.1 h1:2LXaw0vQ/nSjSKyNil2NoNXXuH+nFSSrlUUBl1x6Jcg=
 github.com/ava-labs/firewood-go-ethhash/ffi v0.3.1/go.mod h1:0Z60sYkUFvvOlOc0XHGbP+271EjP5KjaaOA0EQxCCSA=
-github.com/ava-labs/libevm v1.13.14-0.4.0.rc.2 h1:n+YIGbY3rsmtzbQ3ec9qm5gZRkZVIZRwrWGDj9kgwLE=
-github.com/ava-labs/libevm v1.13.14-0.4.0.rc.2/go.mod h1:oyJdZfpQTc9fVzAbDry+QRYeiCbw8s/kGaDUsEMpb4I=
 github.com/aws/aws-sdk-go-v2 v1.32.5 h1:U8vdWJuY7ruAkzaOdD7guwJjD06YSKmnKCJs7s3IkIo=
 github.com/aws/aws-sdk-go-v2 v1.32.5/go.mod h1:P5WJBrYqqbWVaOxgH0X/FYYD47/nooaPOZPlQdmiN2U=
 github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.6.6 h1:pT3hpW0cOHRJx8Y0DfJUEQuqPild8jRGmSFmBgvydr0=

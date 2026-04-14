@@ -212,6 +212,6 @@ tool (
 replace (
 	github.com/ava-labs/avalanchego => ../../
 	github.com/ava-labs/avalanchego/graft/evm => ../evm
-	github.com/ava-labs/libevm => github.com/ava-labs/libevm v1.13.14-0.4.0.rc.2
+	github.com/ava-labs/libevm => github.com/Chaintable/libevm v1.13.15-0.20251016142715-1bccf4f2ddb2-debank-1.0.20260414155142-cd81d0aad5bb
 	github.com/crate-crypto/go-ipa => github.com/crate-crypto/go-ipa v0.0.0-20231025140028-3c0104f4b233
 )
