@@ -1246,8 +1246,14 @@ func (bc *BlockChain) writeBlockAndSetHead(block *types.Block, parentRoot common
 	// setPreference is called. Otherwise, we consider it a side chain block.
 	if bc.newTip(block) {
 		bc.writeCanonicalBlockWithLogs(block, logs)
-		if tracer.NodeXPusher != nil && !tracer.NodeXPusher.IsBackup && tracer.NodeXPusher.LastPushedBlock().BlockNumber <= block.NumberU64() {
-			lastPushBlock := tracer.NodeXPusher.LastPushedBlock()
+		lastPushBlock := (*ptypes.BlockContext)(nil)
+		if tracer.NodeXPusher != nil {
+			lastPushBlock = tracer.NodeXPusher.LastPushedBlock()
+		}
+		// Only attempt to publish a block change notification once the pusher
+		// has a known last-pushed block (otherwise we have no ancestor to diff
+		// against, e.g. during early bootstrap before Kafka has any notices).
+		if tracer.NodeXPusher != nil && !tracer.NodeXPusher.IsBackup && lastPushBlock != nil && lastPushBlock.BlockNumber <= block.NumberU64() {
 			_, dropBlocks, newBlocks := bc.getCommonAncestor(*lastPushBlock, ptypes.BlockContext{
 				BlockNumber: block.NumberU64(),
 				Hash:        block.Hash(),
