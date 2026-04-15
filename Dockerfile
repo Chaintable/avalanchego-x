@@ -8,6 +8,15 @@ FROM --platform=$BUILDPLATFORM golang:$GO_VERSION-bookworm AS builder
 
 WORKDIR /build
 
+# Configure git to use a GitHub access token so private Chaintable/* modules
+# (e.g. Chaintable/libevm) can be fetched during `go mod download`.
+ARG ACCESS_TOKEN
+RUN if [ -n "$ACCESS_TOKEN" ]; then \
+    git config --global url."https://x-access-token:${ACCESS_TOKEN}@github.com".insteadOf "https://github.com"; \
+    fi
+ENV GOPRIVATE=github.com/Chaintable/*
+ENV GOSUMDB=off
+
 # Copy and download avalanche dependencies using go mod
 COPY go.mod .
 COPY go.sum .
