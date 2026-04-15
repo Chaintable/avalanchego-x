@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Chaintable/pipeline/tracer"
 	"github.com/ava-labs/libevm/common"
 	"github.com/ava-labs/libevm/common/hexutil"
 	"github.com/spf13/cast"
@@ -180,6 +181,8 @@ type Config struct {
 
 	// Database Scheme
 	StateScheme string `json:"state-scheme"`
+
+	VMTraceCfg *tracer.PipelineTracerConfig `json:"vm-trace-config"`
 }
 
 // GetConfig returns a new config object with the default values set and the

@@ -1,0 +1,77 @@
+name: "Build new artifacts"
+
+on:
+  pull_request:
+    branches:
+      - "main"
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+env:
+  REGISTRY: 294354037686.dkr.ecr.ap-northeast-1.amazonaws.com
+  IMAGE: blockchain-avax-x
+  DOCKERFILE: Dockerfile
+  AWS_REGION: ap-northeast-1
+
+jobs:
+  build-artifacts:
+    strategy:
+      matrix:
+        arch: [amd64]
+    runs-on: [self-hosted, "${{ matrix.arch }}"]
+    steps:
+      - name: Checkout avalanchego-x
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: tibdex/github-app-token@v1
+        id: generate-token
+        with:
+          app_id: ${{ secrets.RELEASE_MANAGER_APP_ID }}
+          private_key: ${{ secrets.RELEASE_MANAGER_APP_SECRET }}
+
+      - name: Set env
+        run: |
+          # Prefer the release tag as the image tag when the workflow was
+          # triggered by `git push <tag>`; otherwise fall back to the short
+          # commit hash.
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            IMAGE_TAG="${GITHUB_REF_NAME}"
+          else
+            IMAGE_TAG="$(git rev-parse --short=9 HEAD)"
+          fi
+          echo "IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_ENV
+          echo "GO_VERSION=$(awk '/^go / {print $2; exit}' go.mod)" >> $GITHUB_ENV
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          file: ${{ env.DOCKERFILE }}
+          context: .
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ matrix.arch }}-${{ env.IMAGE_TAG }}
+          build-args: |
+            ACCESS_TOKEN=${{ steps.generate-token.outputs.token }}
+            GO_VERSION=${{ env.GO_VERSION }}
+          provenance: false
+
+      - name: Lark Notification
+        continue-on-error: true
+        run: |
+          if command -v notiv3 >/dev/null 2>&1; then
+            notiv3 "Blockchain avax latest image pushed 🎉" ${REGISTRY}/${IMAGE}:${{ matrix.arch }}-${IMAGE_TAG}
+          else
+            echo "notiv3 not installed on this runner; skipping Lark notification"
+          fi

@@ -30,6 +30,7 @@ package ethconfig
 import (
 	"time"
 
+	"github.com/Chaintable/pipeline/tracer"
 	"github.com/ava-labs/avalanchego/graft/coreth/core"
 	"github.com/ava-labs/avalanchego/graft/coreth/core/txpool/blobpool"
 	"github.com/ava-labs/avalanchego/graft/coreth/core/txpool/legacypool"
@@ -183,4 +184,6 @@ type Config struct {
 
 	// TODO: remove once we move SuggestPriceOptions to AVAX/custom API
 	PriceOptionConfig ethapi.PriceOptionConfig
+
+	VMTraceCfg *tracer.PipelineTracerConfig
 }

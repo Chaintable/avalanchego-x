@@ -8,6 +8,15 @@ FROM --platform=$BUILDPLATFORM golang:$GO_VERSION-bookworm AS builder
 
 WORKDIR /build
 
+# Configure git to use a GitHub access token so private Chaintable/* modules
+# (e.g. Chaintable/libevm) can be fetched during `go mod download`.
+ARG ACCESS_TOKEN
+RUN if [ -n "$ACCESS_TOKEN" ]; then \
+    git config --global url."https://x-access-token:${ACCESS_TOKEN}@github.com".insteadOf "https://github.com"; \
+    fi
+ENV GOPRIVATE=github.com/Chaintable/*
+ENV GOSUMDB=off
+
 # Copy and download avalanche dependencies using go mod
 COPY go.mod .
 COPY go.sum .
@@ -54,10 +63,21 @@ RUN . ./build_env.sh && \
 # potentially emulated execution container.
 RUN mkdir -p /avalanchego/build
 
+# Ensure the plugin directory exists inside the build output so the final image
+# ships a valid plugin dir (avalanchego refuses to start without it).
+RUN mkdir -p /build/build/plugins
+
 # ============= Cleanup Stage ================
 # Commands executed in this stage may be emulated (i.e. very slow) if TARGETPLATFORM and
 # BUILDPLATFORM have different arches.
 FROM debian:12-slim AS execution
+
+# Install CA certificates so outbound TLS (e.g. AWS S3 for the pipeline tracer)
+# can verify server certificates. debian:*-slim ships without them.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && update-ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 # Maintain compatibility with previous images
 COPY --from=builder /avalanchego/build /avalanchego/build
