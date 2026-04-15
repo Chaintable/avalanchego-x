@@ -70,4 +70,8 @@ jobs:
       - name: Lark Notification
         continue-on-error: true
         run: |
-          notiv3 "Blockchain avax latest image pushed 🎉" ${REGISTRY}/${IMAGE}:${{ matrix.arch }}-${IMAGE_TAG}
+          if command -v notiv3 >/dev/null 2>&1; then
+            notiv3 "Blockchain avax latest image pushed 🎉" ${REGISTRY}/${IMAGE}:${{ matrix.arch }}-${IMAGE_TAG}
+          else
+            echo "notiv3 not installed on this runner; skipping Lark notification"
+          fi
