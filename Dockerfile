@@ -72,6 +72,13 @@ RUN mkdir -p /build/build/plugins
 # BUILDPLATFORM have different arches.
 FROM debian:12-slim AS execution
 
+# Install CA certificates so outbound TLS (e.g. AWS S3 for the pipeline tracer)
+# can verify server certificates. debian:*-slim ships without them.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && update-ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 # Maintain compatibility with previous images
 COPY --from=builder /avalanchego/build /avalanchego/build
 WORKDIR /avalanchego/build
