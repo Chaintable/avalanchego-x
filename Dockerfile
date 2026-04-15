@@ -63,6 +63,10 @@ RUN . ./build_env.sh && \
 # potentially emulated execution container.
 RUN mkdir -p /avalanchego/build
 
+# Ensure the plugin directory exists inside the build output so the final image
+# ships a valid plugin dir (avalanchego refuses to start without it).
+RUN mkdir -p /build/build/plugins
+
 # ============= Cleanup Stage ================
 # Commands executed in this stage may be emulated (i.e. very slow) if TARGETPLATFORM and
 # BUILDPLATFORM have different arches.
