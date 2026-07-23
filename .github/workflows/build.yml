@@ -18,8 +18,9 @@ env:
 jobs:
   build-artifacts:
     strategy:
+      fail-fast: false
       matrix:
-        arch: [amd64]
+        arch: [amd64, arm64]
     runs-on: [self-hosted, "${{ matrix.arch }}"]
     steps:
       - name: Checkout avalanchego-x
@@ -67,11 +68,49 @@ jobs:
             GO_VERSION=${{ env.GO_VERSION }}
           provenance: false
 
+  merge-docker-manifest:
+    runs-on: [self-hosted, general]
+    needs: build-artifacts
+    steps:
+      - name: Checkout avalanchego-x
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Set env
+        run: |
+          # Must match the tag computed by build-artifacts.
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            IMAGE_TAG="${GITHUB_REF_NAME}"
+          else
+            IMAGE_TAG="$(git rev-parse --short=9 HEAD)"
+          fi
+          echo "IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_ENV
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Merge manifest
+        run: |
+          # Registry-side manifest list; the per-arch tags stay published so a
+          # specific arch can still be pulled explicitly.
+          docker buildx imagetools create \
+            --tag ${REGISTRY}/${IMAGE}:${IMAGE_TAG} \
+            ${REGISTRY}/${IMAGE}:amd64-${IMAGE_TAG} \
+            ${REGISTRY}/${IMAGE}:arm64-${IMAGE_TAG}
+          docker buildx imagetools inspect ${REGISTRY}/${IMAGE}:${IMAGE_TAG}
+
       - name: Lark Notification
         continue-on-error: true
         run: |
           if command -v notiv3 >/dev/null 2>&1; then
-            notiv3 "Blockchain avax latest image pushed 🎉" ${REGISTRY}/${IMAGE}:${{ matrix.arch }}-${IMAGE_TAG}
+            notiv3 "Blockchain avax latest image pushed 🎉" ${REGISTRY}/${IMAGE}:${IMAGE_TAG}
           else
             echo "notiv3 not installed on this runner; skipping Lark notification"
           fi
