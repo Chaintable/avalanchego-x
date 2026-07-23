@@ -39,14 +39,6 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
-      # Required so `go mod download` can fetch the private Chaintable/*
-      # modules (libevm, pipeline) inside the Docker build.
-      - uses: tibdex/github-app-token@v1
-        id: generate-token
-        with:
-          app_id: ${{ secrets.RELEASE_MANAGER_APP_ID }}
-          private_key: ${{ secrets.RELEASE_MANAGER_APP_SECRET }}
-
       - name: Set env
         run: |
           # Prefer the release tag as the image tag when the workflow was
@@ -92,8 +84,10 @@ jobs:
           context: .
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ matrix.arch }}-${{ env.IMAGE_TAG }}
+          # No ACCESS_TOKEN: Chaintable/libevm and Chaintable/pipeline are
+          # public, so `go mod download` fetches them unauthenticated. The
+          # Dockerfile skips its git-credential setup when the arg is empty.
           build-args: |
-            ACCESS_TOKEN=${{ steps.generate-token.outputs.token }}
             GO_VERSION=${{ env.GO_VERSION }}
           cache-from: type=gha,scope=build-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=build-${{ matrix.arch }}
