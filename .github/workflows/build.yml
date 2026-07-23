@@ -15,7 +15,7 @@ concurrency:
 
 env:
   AWS_REGION: us-east-1
-  REGISTRY: public.ecr.aws/b2h7a5c4/chaintable
+  REGISTRY: public.ecr.aws/b2h7a5c4
   IMAGE: blockchain-avax-x
   DOCKERFILE: Dockerfile
 
