@@ -9,24 +9,27 @@ on:
       - "v*"
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
-  REGISTRY: 294354037686.dkr.ecr.ap-northeast-1.amazonaws.com
-  IMAGE: blockchain-avax-x
+  AWS_REGION: us-east-1
+  REGISTRY: public.ecr.aws/b2h7a5c4/chaintable
+  IMAGE: avax-writer
   DOCKERFILE: Dockerfile
-  AWS_REGION: ap-northeast-1
-  # Public ECR lives in a separate registry and is only reachable through the
-  # us-east-1 endpoint, regardless of where the image is consumed.
-  PUBLIC_REGISTRY: public.ecr.aws/b2h7a5c4/chaintable
-  PUBLIC_IMAGE: avax-writer
-  PUBLIC_AWS_REGION: us-east-1
 
 jobs:
   build-artifacts:
     strategy:
       fail-fast: false
       matrix:
-        arch: [amd64, arm64]
-    runs-on: [self-hosted, "${{ matrix.arch }}"]
+        include:
+          - runner: ubuntu2404-linux-x86-64-16c
+            arch: amd64
+          - runner: ubuntu2204-arm64-16c
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       id-token: write
@@ -36,6 +39,8 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
+      # Required so `go mod download` can fetch the private Chaintable/*
+      # modules (libevm, pipeline) inside the Docker build.
       - uses: tibdex/github-app-token@v1
         id: generate-token
         with:
@@ -55,57 +60,47 @@ jobs:
           echo "IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_ENV
           echo "GO_VERSION=$(awk '/^go / {print $2; exit}' go.mod)" >> $GITHUB_ENV
 
-      # Private ECR uses the self-hosted runner's instance role.
       - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v1
+        uses: aws-actions/configure-aws-credentials@v4
         with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
-
-      # Public ECR is a different account/registry, so it needs its own OIDC
-      # role. This overwrites the AWS_* env vars set above, but the private
-      # registry's docker credentials are already persisted by the login step.
-      - name: Configure AWS Credentials (public ECR, OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ env.PUBLIC_AWS_REGION }}
-
-      - name: Login to Amazon ECR Public
-        id: login-ecr-public
-        uses: aws-actions/amazon-ecr-login@v2
         with:
           registry-type: public
 
-      # ECR Public does not create repositories on push. Idempotent: the second
+      # ECR Public does not create repositories on push. Idempotent: the other
       # matrix job (and every later run) just hits RepositoryAlreadyExists.
-      - name: Ensure public ECR repository exists
+      - name: Ensure ECR repository exists
         continue-on-error: true
         run: |
           aws ecr-public create-repository \
-            --region ${PUBLIC_AWS_REGION} \
-            --repository-name ${PUBLIC_IMAGE} \
-            || echo "repository ${PUBLIC_IMAGE} already exists (or cannot be created by this role)"
+            --region ${AWS_REGION} \
+            --repository-name ${IMAGE} \
+            || echo "repository ${IMAGE} already exists (or cannot be created by this role)"
 
-      - name: Build image
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image and push to ECR
         uses: docker/build-push-action@v6
         with:
           file: ${{ env.DOCKERFILE }}
           context: .
           push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ matrix.arch }}-${{ env.IMAGE_TAG }}
-            ${{ env.PUBLIC_REGISTRY }}/${{ env.PUBLIC_IMAGE }}:${{ matrix.arch }}-${{ env.IMAGE_TAG }}
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ matrix.arch }}-${{ env.IMAGE_TAG }}
           build-args: |
             ACCESS_TOKEN=${{ steps.generate-token.outputs.token }}
             GO_VERSION=${{ env.GO_VERSION }}
+          cache-from: type=gha,scope=build-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=build-${{ matrix.arch }}
           provenance: false
 
   merge-docker-manifest:
-    runs-on: [self-hosted, general]
+    runs-on: ubuntu2404-linux-x86-64-16c
     needs: build-artifacts
     permissions:
       contents: read
@@ -127,44 +122,26 @@ jobs:
           echo "IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_ENV
 
       - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v1
+        uses: aws-actions/configure-aws-credentials@v4
         with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Configure AWS Credentials (public ECR, OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ env.PUBLIC_AWS_REGION }}
-
-      - name: Login to Amazon ECR Public
-        id: login-ecr-public
-        uses: aws-actions/amazon-ecr-login@v2
         with:
           registry-type: public
 
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Merge manifest
         run: |
-          # Registry-side manifest lists; the per-arch tags stay published so a
+          # Registry-side manifest list; the per-arch tags stay published so a
           # specific arch can still be pulled explicitly.
-          for repo in "${REGISTRY}/${IMAGE}" "${PUBLIC_REGISTRY}/${PUBLIC_IMAGE}"; do
-            docker buildx imagetools create \
-              --tag "${repo}:${IMAGE_TAG}" \
-              "${repo}:amd64-${IMAGE_TAG}" \
-              "${repo}:arm64-${IMAGE_TAG}"
-            docker buildx imagetools inspect "${repo}:${IMAGE_TAG}"
-          done
-
-      - name: Lark Notification
-        continue-on-error: true
-        run: |
-          if command -v notiv3 >/dev/null 2>&1; then
-            notiv3 "Blockchain avax latest image pushed 🎉" \
-              "${REGISTRY}/${IMAGE}:${IMAGE_TAG} | ${PUBLIC_REGISTRY}/${PUBLIC_IMAGE}:${IMAGE_TAG}"
-          else
-            echo "notiv3 not installed on this runner; skipping Lark notification"
-          fi
+          docker buildx imagetools create \
+            --tag ${REGISTRY}/${IMAGE}:${IMAGE_TAG} \
+            ${REGISTRY}/${IMAGE}:amd64-${IMAGE_TAG} \
+            ${REGISTRY}/${IMAGE}:arm64-${IMAGE_TAG}
+          docker buildx imagetools inspect ${REGISTRY}/${IMAGE}:${IMAGE_TAG}
