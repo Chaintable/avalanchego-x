@@ -236,6 +236,7 @@ func New(
 			Preimages:                       config.Preimages,
 			AcceptedCacheSize:               config.AcceptedCacheSize,
 			TransactionHistory:              config.TransactionHistory,
+			BlockHistory:                    config.BlockHistory,
 			SkipTxIndexing:                  config.SkipTxIndexing,
 			StateHistory:                    config.StateHistory,
 			StateScheme:                     scheme,

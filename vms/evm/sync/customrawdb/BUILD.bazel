@@ -5,6 +5,7 @@ go_library(
     name = "customrawdb",
     srcs = [
         "db.go",
+        "history.go",
         "markers.go",
         "sync_progress.go",
     ],
@@ -25,6 +26,7 @@ go_test(
     name = "customrawdb_test",
     srcs = [
         "db_test.go",
+        "history_test.go",
         "markers_test.go",
         "sync_progress_test.go",
     ],

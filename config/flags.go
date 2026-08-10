@@ -325,6 +325,7 @@ func addNodeFlags(fs *pflag.FlagSet) {
 	// ProposerVM
 	fs.Bool(ProposerVMUseCurrentHeightKey, false, "Have the ProposerVM always report the last accepted P-chain block height")
 	fs.Duration(ProposerVMMinBlockDelayKey, proposervm.DefaultMinBlockDelay, "Minimum delay to enforce when building a snowman++ block for the P-chain and X-chain")
+	fs.Uint64(ProposerVMNumHistoricalBlocksKey, proposervm.DefaultNumHistoricalBlocks, "Number of historical snowman++ blocks to retain on the Primary Network chains (0 = retain all). Must comfortably exceed the inner VM's crash-recovery replay depth (2*commit-interval) when non-zero")
 
 	// Metrics
 	fs.Bool(MeterVMsEnabledKey, true, "Enable Meter VMs to track VM performance with more granularity")

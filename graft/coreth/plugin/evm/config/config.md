@@ -162,6 +162,29 @@ Configuration is provided as a JSON object. All fields are optional unless other
 | `historical-proof-query-window` | uint64 | Number of blocks before last accepted for proof queries (archive mode only, ~24 hours) | `43200` |
 | `state-history` | uint64 | Number of most recent states that are accesible on disk (pruning mode only) | `32` |
 
+### Block History Pruning
+
+> **WARNING**: Block history pruning is **enabled by default** (`block-history: 90000`, roughly 2 days at a 2s block target). Nodes that need full block history (archival RPC, historical tracing, full `eth_getLogs` ranges) must explicitly set `"block-history": 0`. Pruned data cannot be recovered without a full resync.
+
+When `block-history` is non-zero, an online background pruner continuously deletes the **bodies, receipts, total difficulty and transaction lookup indices** of blocks below `[last accepted - block-history]`. **Headers, canonical hash mappings and the genesis block are always retained.** Progress is checkpointed every batch, so the pruner resumes after restarts and crashes; when first enabled on a node with existing history, the initial catch-up deletes the backlog incrementally and compacts the database as it goes.
+
+Effects on APIs for pruned heights:
+
+- `eth_getBlockByNumber` / `eth_getBlockByHash`: return `null` (the full block cannot be assembled without its body); headers remain available internally and via `eth_getHeaderByNumber`/`eth_getHeaderByHash`
+- `eth_getTransactionByHash` / `eth_getTransactionReceipt`: return `null`
+- `eth_getLogs` / filter queries: return an explicit error if the range starts below the earliest retained block
+- `debug_trace*`: return an explicit "block not found" error
+
+The earliest retained height is persisted; if pruning is later disabled (`block-history: 0`), previously pruned heights remain unavailable and the `eth_getLogs` guard keeps rejecting them.
+
+Constraints: non-zero values must be at least `32768`, at least `4*commit-interval` and at least `2*state-sync-commit-interval+256`; incompatible with `populate-missing-tries`; `transaction-history` (if non-zero) must not exceed `block-history`.
+
+> **Note**: Blocks are also stored by the ProposerVM in a separate database. To reclaim that copy as well, run avalanchego with `--proposervm-num-historical-blocks` set to a matching value (it must be strictly greater than `2*commit-interval`; using the same value as `block-history` is recommended).
+
+| Option | Type | Description | Default |
+|--------|------|-------------|---------|
+| `block-history` | uint64 | Number of most recent blocks whose bodies, receipts and tx indices are retained on disk (0 = retain all) | `90000` |
+
 ## Transaction Pool Configuration
 
 | Option | Type | Description | Default |

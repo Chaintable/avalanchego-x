@@ -515,6 +515,10 @@ func (b *EthAPIBackend) GetMaxBlocksPerRequest() int64 {
 	return b.eth.settings.MaxBlocksPerRequest
 }
 
+func (b *EthAPIBackend) HistoryPrunedTail() uint64 {
+	return b.eth.blockchain.HistoryPrunedTail()
+}
+
 func (b *EthAPIBackend) StateAtBlock(ctx context.Context, block *types.Block, reexec uint64, base *state.StateDB, readOnly bool, preferDisk bool) (*state.StateDB, tracers.StateReleaseFunc, error) {
 	return b.eth.stateAtBlock(ctx, block, reexec, base, readOnly, preferDisk)
 }

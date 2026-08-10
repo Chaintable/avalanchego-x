@@ -87,6 +87,10 @@ type Backend interface {
 	IsAllowUnfinalizedQueries() bool
 	LastAcceptedBlock() *types.Block
 	GetMaxBlocksPerRequest() int64
+	// HistoryPrunedTail returns the first block number whose receipts are
+	// retained on disk (0 = nothing pruned). Log queries below this height
+	// are rejected instead of silently returning incomplete results.
+	HistoryPrunedTail() uint64
 }
 
 // FilterSystem holds resources shared by all filters.

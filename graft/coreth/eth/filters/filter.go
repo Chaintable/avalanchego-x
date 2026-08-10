@@ -116,6 +116,9 @@ func (f *Filter) Logs(ctx context.Context) ([]*types.Log, error) {
 		if header == nil {
 			return nil, errors.New("unknown block")
 		}
+		if tail := f.sys.backend.HistoryPrunedTail(); tail != 0 && header.Number.Uint64() < tail {
+			return nil, fmt.Errorf("historical logs have been pruned: requested block %d, earliest queryable is %d", header.Number.Uint64(), tail)
+		}
 		return f.blockLogs(ctx, header)
 	}
 
@@ -198,6 +201,11 @@ func (f *Filter) Logs(ctx context.Context) ([]*types.Log, error) {
 	// return an error instead of searching for the logs.
 	if maxBlocks := f.sys.backend.GetMaxBlocksPerRequest(); f.end-f.begin >= maxBlocks && maxBlocks > 0 {
 		return nil, fmt.Errorf("requested too many blocks from %d to %d, maximum is set to %d", f.begin, f.end, maxBlocks)
+	}
+	// Receipts of blocks below the pruned history tail have been deleted;
+	// error explicitly instead of silently returning incomplete results.
+	if tail := f.sys.backend.HistoryPrunedTail(); tail != 0 && f.begin >= 0 && uint64(f.begin) < tail {
+		return nil, fmt.Errorf("historical logs have been pruned: requested from block %d, earliest queryable is %d", f.begin, tail)
 	}
 	// Gather all indexed logs, and finish with non indexed ones
 	logChan, errChan := f.rangeLogsAsync(ctx)

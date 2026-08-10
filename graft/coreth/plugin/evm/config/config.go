@@ -160,6 +160,14 @@ type Config struct {
 	//  * 0:   means no limit
 	//  * N:   means N block limit [HEAD-N+1, HEAD] and delete extra indexes
 	TransactionHistory uint64 `json:"transaction-history"`
+	// BlockHistory is the maximum number of blocks from head whose bodies,
+	// receipts, total difficulty and tx lookup indices are retained on disk.
+	// Older blocks have these records deleted online; headers and canonical
+	// hash mappings (and the genesis block) are always retained.
+	//  * 0:   means no limit (feature disabled)
+	//  * N:   means the latest N blocks [HEAD-N+1, HEAD] are retained; must be
+	//         at least MinBlockHistory
+	BlockHistory uint64 `json:"block-history"`
 	// The maximum number of blocks from head whose state histories are reserved for pruning blockchains.
 	StateHistory uint64 `json:"state-history"`
 
@@ -264,6 +272,30 @@ func (c *Config) validate(networkID uint32) error {
 
 	if c.PushGossipPercentStake < 0 || c.PushGossipPercentStake > 1 {
 		return fmt.Errorf("push-gossip-percent-stake is %f but must be in the range [0, 1]", c.PushGossipPercentStake)
+	}
+
+	if c.BlockHistory != 0 {
+		// Crash recovery replays up to 2*commit-interval blocks, gasprice warms
+		// the most recent 40 blocks and the state sync server requires blocks
+		// back to the previous syncable boundary; the minimum window must cover
+		// all of them with margin.
+		if c.BlockHistory < MinBlockHistory {
+			return fmt.Errorf("block-history (%d) must be at least %d", c.BlockHistory, MinBlockHistory)
+		}
+		if c.BlockHistory < 4*c.CommitInterval {
+			return fmt.Errorf("block-history (%d) must be at least 4*commit-interval (%d)", c.BlockHistory, 4*c.CommitInterval)
+		}
+		// Serving state sync requires blocks back to the previous syncable
+		// boundary plus the parents fetched by syncing peers.
+		if minForStateSync := 2*c.StateSyncCommitInterval + 256; c.BlockHistory < minForStateSync {
+			return fmt.Errorf("block-history (%d) must be at least 2*state-sync-commit-interval+256 (%d)", c.BlockHistory, minForStateSync)
+		}
+		if c.PopulateMissingTries != nil {
+			return errors.New("cannot enable populate missing tries while block history pruning is enabled")
+		}
+		if c.TransactionHistory != 0 && c.TransactionHistory > c.BlockHistory {
+			return fmt.Errorf("transaction-history (%d) must not exceed block-history (%d)", c.TransactionHistory, c.BlockHistory)
+		}
 	}
 	return nil
 }

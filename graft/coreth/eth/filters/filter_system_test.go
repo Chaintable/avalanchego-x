@@ -74,6 +74,7 @@ type testBackend struct {
 	pendingLogsFeed   event.Feed
 	chainFeed         event.Feed
 	chainAcceptedFeed event.Feed
+	historyPrunedTail uint64
 }
 
 func (b *testBackend) ChainConfig() *params.ChainConfig {
@@ -95,6 +96,10 @@ func (b *testBackend) IsAllowUnfinalizedQueries() bool {
 
 func (b *testBackend) GetMaxBlocksPerRequest() int64 {
 	return 0
+}
+
+func (b *testBackend) HistoryPrunedTail() uint64 {
+	return b.historyPrunedTail
 }
 
 func (b *testBackend) LastAcceptedBlock() *types.Block {
