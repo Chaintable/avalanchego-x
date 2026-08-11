@@ -172,3 +172,67 @@ func TestGetConfig(t *testing.T) {
 		})
 	}
 }
+
+func TestBlockHistoryValidation(t *testing.T) {
+	tests := []struct {
+		name        string
+		configJSON  string
+		networkID   uint32
+		expectedErr string
+	}{
+		{
+			name:       "default block history is valid",
+			configJSON: `{}`,
+		},
+		{
+			name:       "disabled block history is valid",
+			configJSON: `{"block-history": 0}`,
+		},
+		{
+			name:        "below minimum window",
+			configJSON:  `{"block-history": 10000}`,
+			expectedErr: "must be at least",
+		},
+		{
+			name: "below 4x commit interval",
+			// Non-default commit intervals are only allowed on local networks.
+			configJSON:  `{"block-history": 40000, "commit-interval": 16384}`,
+			networkID:   constants.LocalID,
+			expectedErr: "must be at least 4*commit-interval",
+		},
+		{
+			name:        "below state sync serving window",
+			configJSON:  `{"block-history": 33000}`,
+			expectedErr: "2*state-sync-commit-interval+256",
+		},
+		{
+			name:        "incompatible with populate missing tries",
+			configJSON:  `{"block-history": 90000, "populate-missing-tries": 0, "pruning-enabled": false, "offline-pruning-enabled": false}`,
+			expectedErr: "populate missing tries",
+		},
+		{
+			name:        "transaction history exceeding block history",
+			configJSON:  `{"block-history": 90000, "transaction-history": 100000}`,
+			expectedErr: "transaction-history",
+		},
+		{
+			name:       "transaction history within block history",
+			configJSON: `{"block-history": 90000, "transaction-history": 90000}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			networkID := tt.networkID
+			if networkID == 0 {
+				networkID = constants.TestnetID
+			}
+			_, _, err := GetConfig([]byte(tt.configJSON), networkID)
+			if tt.expectedErr == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tt.expectedErr)
+			}
+		})
+	}
+}

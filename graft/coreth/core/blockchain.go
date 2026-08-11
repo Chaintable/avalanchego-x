@@ -203,6 +203,7 @@ type CacheConfig struct {
 	Preimages                       bool    // Whether to store preimage of trie key to the disk
 	AcceptedCacheSize               int     // Depth of accepted headers cache and accepted logs cache at the accepted tip
 	TransactionHistory              uint64  // Number of recent blocks for which to maintain transaction lookup indices
+	BlockHistory                    uint64  // Number of recent blocks for which to retain bodies, receipts, td and tx indices (0 = retain all; headers are always retained)
 	SkipTxIndexing                  bool    // Whether to skip transaction indexing
 	StateHistory                    uint64  // Number of blocks from head whose state histories are reserved.
 	StateScheme                     string  // Scheme used to store ethereum states and merkle tree nodes on top
@@ -305,6 +306,7 @@ type BlockChain struct {
 	triedb       *triedb.Database // The database handler for maintaining trie nodes.
 	stateCache   state.Database   // State database to reuse between imports (contains state cache)
 	txIndexer    *txIndexer       // Transaction indexer, might be nil if not enabled
+	blockPruner  *blockPruner     // Online block history pruner, might be nil if not enabled
 	stateManager TrieWriter
 
 	hc                *HeaderChain
@@ -385,6 +387,12 @@ type BlockChain struct {
 
 	// [txIndexTailLock] is used to synchronize the updating of the tx index tail.
 	txIndexTailLock sync.Mutex
+
+	// [historyPrunedTail] is the first block number whose body, receipts and
+	// tx indices are retained on disk (see blockPruner). Loaded from its
+	// persisted marker even when pruning is disabled so RPC guards keep
+	// rejecting queries for previously pruned heights.
+	historyPrunedTail atomic.Uint64
 
 	hooks *tracing.Hooks
 }
@@ -506,13 +514,23 @@ func NewBlockChain(
 	// Warm up [hc.acceptedNumberCache] and [acceptedLogsCache]
 	bc.warmAcceptedCaches()
 
-	// if txlookup limit is 0 (uindexing disabled), we don't need to repair the tx index tail.
-	if bc.cacheConfig.TransactionHistory != 0 {
+	// Load the pruned block history tail unconditionally: previously pruned
+	// heights stay unavailable even if pruning is disabled later.
+	prunedTail, err := customrawdb.ReadPrunedBlockTail(bc.db)
+	if err != nil {
+		return nil, err
+	}
+	bc.historyPrunedTail.Store(prunedTail)
+
+	// If tx unindexing or block history pruning is enabled, repair the tx index
+	// tail so the tx indexer never attempts to read bodies that were pruned or
+	// never present locally (state sync).
+	if bc.cacheConfig.TransactionHistory != 0 || bc.cacheConfig.BlockHistory != 0 {
 		latestStateSynced, err := customrawdb.GetLatestSyncPerformed(bc.db)
 		if err != nil {
 			return nil, err
 		}
-		bc.repairTxIndexTail(latestStateSynced)
+		bc.repairTxIndexTail(max(latestStateSynced, prunedTail))
 	}
 
 	// Start processing accepted blocks effects in the background
@@ -521,6 +539,12 @@ func NewBlockChain(
 	// Start tx indexer if it's enabled.
 	if bc.cacheConfig.TransactionHistory != 0 {
 		bc.txIndexer = newTxIndexer(bc.cacheConfig.TransactionHistory, bc)
+	}
+
+	// Start the online block history pruner if it's enabled.
+	if bc.cacheConfig.BlockHistory != 0 {
+		log.Warn("Online block history pruning is enabled; bodies, receipts and tx indices of blocks below the retention window will be deleted", "window", bc.cacheConfig.BlockHistory)
+		bc.blockPruner = newBlockPruner(bc.cacheConfig.BlockHistory, bc)
 	}
 
 	if bc.hooks != nil && bc.hooks.OnGenesisBlock != nil {
@@ -994,6 +1018,10 @@ func (bc *BlockChain) stopWithoutSaving() {
 	// Signal shutdown tx indexer.
 	if bc.txIndexer != nil {
 		bc.txIndexer.close()
+	}
+	// Signal shutdown block history pruner.
+	if bc.blockPruner != nil {
+		bc.blockPruner.close()
 	}
 
 	log.Info("Closing quit channel")
@@ -2298,6 +2326,18 @@ func (bc *BlockChain) ResetToStateSyncedBlock(block *types.Block) error {
 // during block building.
 func (bc *BlockChain) CacheConfig() *CacheConfig {
 	return bc.cacheConfig
+}
+
+// HistoryPrunedTail returns the first block number whose body, receipts and
+// transaction indices are retained on disk, or 0 if nothing has ever been
+// pruned. Headers below this height are still available. The value reflects
+// the persisted marker, so it stays accurate even if pruning was disabled
+// after having run.
+func (bc *BlockChain) HistoryPrunedTail() uint64 {
+	if tail := bc.historyPrunedTail.Load(); tail > 1 {
+		return tail
+	}
+	return 0
 }
 
 func (bc *BlockChain) repairTxIndexTail(newTail uint64) error {

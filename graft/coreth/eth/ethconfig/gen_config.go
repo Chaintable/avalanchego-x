@@ -54,6 +54,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		OfflinePruningDataDirectory     string
 		SkipUpgradeCheck                bool
 		TransactionHistory              uint64 `toml:",omitempty"`
+		BlockHistory                    uint64 `toml:",omitempty"`
 		StateHistory                    uint64 `toml:",omitempty"`
 		StateScheme                     string `toml:",omitempty"`
 		SkipTxIndexing                  bool
@@ -97,6 +98,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.OfflinePruningDataDirectory = c.OfflinePruningDataDirectory
 	enc.SkipUpgradeCheck = c.SkipUpgradeCheck
 	enc.TransactionHistory = c.TransactionHistory
+	enc.BlockHistory = c.BlockHistory
 	enc.StateHistory = c.StateHistory
 	enc.StateScheme = c.StateScheme
 	enc.SkipTxIndexing = c.SkipTxIndexing
@@ -144,6 +146,7 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		OfflinePruningDataDirectory     *string
 		SkipUpgradeCheck                *bool
 		TransactionHistory              *uint64 `toml:",omitempty"`
+		BlockHistory                    *uint64 `toml:",omitempty"`
 		StateHistory                    *uint64 `toml:",omitempty"`
 		StateScheme                     *string `toml:",omitempty"`
 		SkipTxIndexing                  *bool
@@ -263,6 +266,9 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	}
 	if dec.TransactionHistory != nil {
 		c.TransactionHistory = *dec.TransactionHistory
+	}
+	if dec.BlockHistory != nil {
+		c.BlockHistory = *dec.BlockHistory
 	}
 	if dec.StateHistory != nil {
 		c.StateHistory = *dec.StateHistory

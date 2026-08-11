@@ -78,6 +78,9 @@ func NewDefaultConfig() Config {
 		// the number of key/values to ask peers for per request
 		StateSyncRequestSize: 1024,
 		StateHistory:         uint64(32),
+		// Retain roughly 2 days of block bodies/receipts (2s block target);
+		// nodes that need full block history must explicitly set 0.
+		BlockHistory: 90_000,
 		// Estimated block count in 24 hours with 2s block accept period
 		HistoricalProofQueryWindow: uint64(24 * time.Hour / (2 * time.Second)),
 		// Price Option Defaults

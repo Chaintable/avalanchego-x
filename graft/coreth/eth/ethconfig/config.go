@@ -170,6 +170,10 @@ type Config struct {
 	//  * 0:   means no limit
 	//  * N:   means N block limit [HEAD-N+1, HEAD] and delete extra indexes
 	TransactionHistory uint64 `toml:",omitempty"` // The maximum number of blocks from head whose tx indices are reserved.
+	// BlockHistory is the maximum number of blocks from head whose bodies,
+	// receipts, td and tx lookup indices are retained on disk (0 = retain
+	// all). Headers are always retained.
+	BlockHistory uint64 `toml:",omitempty"`
 	StateHistory       uint64 `toml:",omitempty"` // The maximum number of blocks from head whose state histories are reserved.
 
 	// State scheme represents the scheme used to store ethereum states and trie

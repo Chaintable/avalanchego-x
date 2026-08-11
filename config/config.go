@@ -1454,6 +1454,10 @@ func GetNodeConfig(v *viper.Viper) (node.Config, error) {
 	}
 
 	primaryNetworkConfig := getPrimaryNetworkConfig(v)
+	// Only the Primary Network chains honor the global flag; tracked subnets
+	// (which default to the primary network config) keep retaining all blocks
+	// unless their own subnet config enables pruning explicitly.
+	primaryNetworkConfig.ProposerNumHistoricalBlocks = v.GetUint64(ProposerVMNumHistoricalBlocksKey)
 	if err := primaryNetworkConfig.ValidParameters(); err != nil {
 		return node.Config{}, fmt.Errorf("invalid consensus parameters: %w", err)
 	}

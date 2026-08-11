@@ -388,6 +388,7 @@ func (vm *VM) Initialize(
 	vm.ethConfig.AcceptedCacheSize = vm.config.AcceptedCacheSize
 	vm.ethConfig.StateHistory = vm.config.StateHistory
 	vm.ethConfig.TransactionHistory = vm.config.TransactionHistory
+	vm.ethConfig.BlockHistory = vm.config.BlockHistory
 	vm.ethConfig.SkipTxIndexing = vm.config.SkipTxIndexing
 	vm.ethConfig.VMTraceCfg = vm.config.VMTraceCfg
 	vm.ethConfig.StateScheme = vm.config.StateScheme
