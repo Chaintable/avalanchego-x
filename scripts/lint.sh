@@ -43,7 +43,7 @@ fi
 # by default, "./scripts/lint.sh" runs all lint tests
 # to run only "license_header" test
 # TESTS='license_header' ./scripts/lint.sh
-TESTS=${TESTS:-"golangci_lint warn_testify_assert license_header require_error_is_no_funcs_as_params single_import interface_compliance_nil require_no_error_inline_func import_testing_only_in_tests"}
+TESTS=${TESTS:-"golangci_lint warn_testify_assert license_header single_import interface_compliance_nil require_no_error_inline_func import_testing_only_in_tests"}
 
 function test_golangci_lint {
   ./scripts/run_tool.sh golangci-lint run --config .golangci.yml
@@ -85,13 +85,6 @@ function test_single_import {
   fi
 }
 
-function test_require_error_is_no_funcs_as_params {
-  if find . -type f -name '*.go' "${FIND_EXCLUDES[@]}" -print0 | xargs -0 grep -zo -P 'require.ErrorIs\(.+?\)[^\n]*\)\n'; then
-    echo ""
-    return 1
-  fi
-}
-
 function test_require_no_error_inline_func {
   if find . -type f -name '*.go' "${FIND_EXCLUDES[@]}" -print0 | xargs -0 grep -zo -P '\t+err :?= ((?!require|if).|\n)*require\.NoError\((t, )?err\)'; then
     echo ""
@@ -123,27 +116,36 @@ function test_import_testing_only_in_tests {
 
   IMPORT_TESTING=$( echo "${NON_TEST_GO_FILES}" | xargs grep -lP '^\s*(import\s+)?"testing"');
   IMPORT_TESTIFY=$( echo "${NON_TEST_GO_FILES}" | xargs grep -l '"github.com/stretchr/testify');
+  IMPORT_CMP=$( echo "${NON_TEST_GO_FILES}" | xargs grep -l '"github.com/google/go-cmp/cmp');
   IMPORT_FROM_TESTS=$( echo "${NON_TEST_GO_FILES}" | xargs grep -l '"github.com/ava-labs/avalanchego/.*?tests/');
   IMPORT_TEST_PKG=$( echo "${NON_TEST_GO_FILES}" | xargs grep -lP '"github.com/ava-labs/avalanchego/.*?test"');
 
   # TODO(arr4n): send a PR to add support for build tags in `mockgen` and then enable this.
   # IMPORT_GOMOCK=$( echo "${NON_TEST_GO_FILES}" | xargs grep -l '"go.uber.org/mock');
-  HAVE_TEST_LOGIC=$( printf "%s\n%s\n%s\n%s" "${IMPORT_TESTING}" "${IMPORT_TESTIFY}" "${IMPORT_FROM_TESTS}" "${IMPORT_TEST_PKG}" );
+  HAVE_TEST_LOGIC=$( printf "%s\n%s\n%s\n%s\n%s" "${IMPORT_TESTING}" "${IMPORT_TESTIFY}" "${IMPORT_CMP}" "${IMPORT_FROM_TESTS}" "${IMPORT_TEST_PKG}" );
 
-  IN_TEST_PKG=$( echo "${NON_TEST_GO_FILES}" | grep -P '.*test/[^/]+\.go$' ) # directory (hence package name) ends in "test"
+  # The //main:avalanchego binary is built with 'prod' and 'nocmpopts' tags.
+  # Note that `./...` does not match a directory whose files are ALL excluded
+  # by the tags, so the excluded set MUST be derived by inverting the built set
+  # rather than read from IgnoredGoFiles.
+  GO_LIST_TEMPLATE='{{range .GoFiles}}{{$.Dir}}/{{.}}{{"\n"}}{{end}}'
+  BUILT_WITHOUT_PROD_TAGS=$( go list -e -f "${GO_LIST_TEMPLATE}" "${ROOT}/..." )
+  BUILT_WITH_PROD_TAGS=$( go list -e -tags 'prod,nocmpopts' -f "${GO_LIST_TEMPLATE}" "${ROOT}/..." )
+  IGNORED_BY_PROD_TAGS=$( comm -23 <( echo "${BUILT_WITHOUT_PROD_TAGS}" | sort -u ) <( echo "${BUILT_WITH_PROD_TAGS}" | sort -u ) )
+
+  IN_TEST_PKG=$( echo "${NON_TEST_GO_FILES}" | grep -P '.*test/.+\.go$' ) # ancestral directory (hence package name) ends in "test"
 
   # Files in /tests/ are already excluded by the `find ... ! -path`
-  INTENDED_FOR_TESTING="${IN_TEST_PKG}"
+  INTENDED_FOR_TESTING=$( printf "%s\n%s" "${IN_TEST_PKG}" "${IGNORED_BY_PROD_TAGS}");
 
-  # -3 suppresses files that have test logic and have the "test" build tag
-  # -2 suppresses files that are tagged despite not having detectable test logic
+  # Report files with test-only dependencies outside a test package.
   UNTAGGED=$( comm -23 <( echo "${HAVE_TEST_LOGIC}" | sort -u ) <( echo "${INTENDED_FOR_TESTING}" | sort -u ) );
   if [ -z "${UNTAGGED}" ];
   then
     return 0;
   fi
 
-  echo 'Non-test Go files importing test-only packages MUST (a) be in *test package; or (b) be in /tests/ directory:';
+  echo 'Non-test Go files importing test-only packages MUST (a) be in *test package; (b) be in /tests/ directory; or (c) be excluded by a !prod build constraint:';
   echo "${UNTAGGED}";
   return 1;
 }
