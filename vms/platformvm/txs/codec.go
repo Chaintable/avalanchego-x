@@ -9,13 +9,17 @@ import (
 
 	"github.com/ava-labs/avalanchego/codec"
 	"github.com/ava-labs/avalanchego/codec/linearcodec"
+	"github.com/ava-labs/avalanchego/utils/constants"
 	"github.com/ava-labs/avalanchego/utils/wrappers"
 	"github.com/ava-labs/avalanchego/vms/platformvm/signer"
 	"github.com/ava-labs/avalanchego/vms/platformvm/stakeable"
 	"github.com/ava-labs/avalanchego/vms/secp256k1fx"
 )
 
-const CodecVersion = 0
+const (
+	CodecVersion = 0
+	maxTxSize    = constants.DefaultMaxMessageSize
+)
 
 var (
 	Codec codec.Manager
@@ -48,10 +52,11 @@ func init() {
 		errs.Add(
 			RegisterDurangoTypes(c),
 			RegisterEtnaTypes(c),
+			RegisterHeliconTypes(c),
 		)
 	}
 
-	Codec = codec.NewDefaultManager()
+	Codec = codec.NewManager(maxTxSize)
 	GenesisCodec = codec.NewManager(math.MaxInt32)
 	errs.Add(
 		Codec.RegisterCodec(CodecVersion, c),
@@ -127,5 +132,15 @@ func RegisterEtnaTypes(targetCodec linearcodec.Codec) error {
 		targetCodec.RegisterType(&SetL1ValidatorWeightTx{}),
 		targetCodec.RegisterType(&IncreaseL1ValidatorBalanceTx{}),
 		targetCodec.RegisterType(&DisableL1ValidatorTx{}),
+	)
+}
+
+// RegisterHeliconTypes registers the type information for transactions that
+// were valid during the Helicon series of upgrades.
+func RegisterHeliconTypes(targetCodec linearcodec.Codec) error {
+	return errors.Join(
+		targetCodec.RegisterType(&AddAutoRenewedValidatorTx{}),
+		targetCodec.RegisterType(&SetAutoRenewedValidatorConfigTx{}),
+		targetCodec.RegisterType(&RewardAutoRenewedValidatorTx{}),
 	)
 }
