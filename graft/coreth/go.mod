@@ -8,7 +8,7 @@ module github.com/ava-labs/avalanchego/graft/coreth
 go 1.25.10
 
 require (
-	github.com/Chaintable/pipeline v0.0.59-libevm-v1.13.15-debank-1
+	github.com/Chaintable/pipeline v0.0.59-libevm-v1.13.15-debank-3
 	github.com/ava-labs/avalanchego v1.15.0
 	github.com/ava-labs/avalanchego/graft/evm v1.15.0
 	github.com/ava-labs/firewood-go-ethhash/ffi v0.8.0
