@@ -35,6 +35,9 @@ const expectedMetrics = `
 	# HELP test_gauge_float64
 	# TYPE test_gauge_float64 gauge
 	test_gauge_float64 34567.89
+	# HELP test_gauge_info
+	# TYPE test_gauge_info gauge
+	test_gauge_info{key="value",second_key="second value"} 1
 	# HELP test_histogram
 	# TYPE test_histogram summary
 	test_histogram{quantile="0.5"} 0
@@ -118,8 +121,11 @@ func registerRealMetrics(t *testing.T, register func(t *testing.T, name string, 
 	register(t, "test/gauge_float64", gaugeFloat64)
 
 	gaugeInfo := metrics.NewGaugeInfo()
-	gaugeInfo.Update(metrics.GaugeInfoValue{"key": "value"})
-	register(t, "test/gauge_info", gaugeInfo) // skipped
+	gaugeInfo.Update(metrics.GaugeInfoValue{
+		"second_key": "second value",
+		"key":        "value",
+	})
+	register(t, "test/gauge_info", gaugeInfo)
 
 	sample := metrics.NewUniformSample(1028)
 	histogram := metrics.NewHistogram(sample)
