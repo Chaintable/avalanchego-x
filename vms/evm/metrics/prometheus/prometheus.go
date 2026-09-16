@@ -6,6 +6,7 @@ package prometheus
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -122,7 +123,28 @@ func metricFamily(registry Registry, name string) (mf *dto.MetricFamily, err err
 			}},
 		}, nil
 	case metrics.GaugeInfo:
-		return nil, fmt.Errorf("%w: %q is a %T", errMetricSkip, name, m)
+		// GaugeInfo carries a key/value map rather than a number. Following the
+		// upstream geth convention, it is exported as a gauge with a constant
+		// value of 1 and one label per map entry.
+		value := m.Snapshot().Value()
+		labels := make([]*dto.LabelPair, 0, len(value))
+		for _, key := range slices.Sorted(maps.Keys(value)) {
+			labels = append(labels, &dto.LabelPair{
+				Name:  utils.PointerTo(key),
+				Value: utils.PointerTo(value[key]),
+			})
+		}
+		return &dto.MetricFamily{
+			Name: &name,
+			Help: &helpText,
+			Type: dto.MetricType_GAUGE.Enum(),
+			Metric: []*dto.Metric{{
+				Label: labels,
+				Gauge: &dto.Gauge{
+					Value: utils.PointerTo(float64(1)),
+				},
+			}},
+		}, nil
 	case metrics.Histogram:
 		snapshot := m.Snapshot()
 		thresholds := snapshot.Percentiles(quantiles)
