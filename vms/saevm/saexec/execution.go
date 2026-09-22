@@ -35,6 +35,7 @@ var (
 	errPartialEndOfBlockExecution    = errors.New("end-of-block operations require all transactions to have been executed")
 	errCanonicalWithoutEndOfBlockOps = errors.New("canonical execution requires end-of-block operations")
 	errNilReceiptStore               = errors.New("receipt store is nil")
+	errTracerNotCanonical            = errors.New("tracing requires canonical execution")
 )
 
 // queuedBlock pairs a queued block with the time it was enqueued so that
@@ -129,9 +130,17 @@ func (e *Executor) execute(b *blocks.Block, log logging.Logger) error {
 	defer func() {
 		e.metrics.observeExecuteDuration(time.Since(start))
 	}()
-	stateDB, err := e.StateDB(b.ParentBlock().PostExecutionStateRoot())
+	parentRoot := b.ParentBlock().PostExecutionStateRoot()
+	stateDB, err := e.StateDB(parentRoot)
 	if err != nil {
 		return err
+	}
+
+	var tracer Tracer
+	if e.tracer != nil && e.tracer.ShouldTrace(b.EthBlock()) {
+		tracer = e.tracer
+		stateDB.OnLog = tracer.OnLog
+		stateDB.OnCommit = tracer.OnCommit
 	}
 
 	// The prefetcher loads trie nodes during execution which removes the loads
@@ -152,11 +161,12 @@ func (e *Executor) execute(b *blocks.Block, log logging.Logger) error {
 		log,
 		asCanonical(),
 		WithReceiptStore(e.receipts),
+		withTracer(tracer),
 	)
 	if err != nil {
 		return err
 	}
-	return e.afterExecution(b, stateDB, result)
+	return e.afterExecution(b, stateDB, result, tracer, parentRoot)
 }
 
 type (
@@ -170,6 +180,7 @@ type (
 		skipEndOfBlockOps bool
 		canonical         bool
 		receiptStore      ReceiptStore
+		tracer            Tracer
 	}
 
 	// ExecutionResults holds the outputs of [Execute].
@@ -215,6 +226,14 @@ func asCanonical() Option {
 	})
 }
 
+// withTracer traces execution with t, which MAY be nil. It is unexported
+// because tracing is exclusive to canonical execution by the [Executor].
+func withTracer(t Tracer) Option {
+	return options.Func[executionConfig](func(c *executionConfig) {
+		c.tracer = t
+	})
+}
+
 // WithReceiptStore configures where Execute publishes transaction receipts.
 func WithReceiptStore(receiptStore ReceiptStore) Option {
 	return options.Func[executionConfig](func(c *executionConfig) {
@@ -234,6 +253,9 @@ func (c *executionConfig) verify(numTxs uint) error {
 	}
 	if c.receiptStore == nil {
 		return errNilReceiptStore
+	}
+	if c.tracer != nil && !c.canonical {
+		return errTracerNotCanonical
 	}
 	return nil
 }
@@ -310,6 +332,12 @@ func Execute(
 	}
 	header.BaseFee = baseFee.ToBig()
 
+	var evmConfig vm.Config
+	if config.tracer != nil {
+		evmConfig.Tracer = config.tracer
+		config.tracer.OnBlockStart(b.EthBlock(), baseFee.ToBig())
+	}
+
 	signer := b.Signer(chainConfig)
 	gasPool := core.GasPool(math.MaxUint64) // required by geth but irrelevant so max it out
 
@@ -325,6 +353,14 @@ func Execute(
 		stateDB.SetTxContext(tx.Hash(), ti)
 		b.CheckSenderBalanceBound(stateDB, signer, tx)
 
+		if config.tracer != nil {
+			from, err := types.Sender(signer, tx)
+			if err != nil {
+				return nil, fmt.Errorf("%w: recovering sender of transaction [%d](%#x): %v", errFatal, ti, tx.Hash(), err)
+			}
+			config.tracer.OnTxStart(tx, from)
+		}
+
 		// Executes the transaction and calls [state.StateDB.Finalise].
 		receipt, err := core.ApplyTransaction(
 			chainConfig,
@@ -335,7 +371,7 @@ func Execute(
 			header,
 			tx,
 			(*uint64)(&res.GasConsumed),
-			vm.Config{},
+			evmConfig,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("%w: transaction execution errored (not reverted) [%d](%#x): %v", errFatal, ti, tx.Hash(), err)
@@ -371,6 +407,9 @@ func Execute(
 			r.Put(&Receipt{receipt, signer, tx})
 		}
 		res.Receipts[ti] = receipt
+		if config.tracer != nil {
+			config.tracer.OnTxEnd(receipt, nil)
+		}
 	}
 
 	if config.skipEndOfBlockOps {
@@ -420,7 +459,7 @@ func Execute(
 	return res, nil
 }
 
-func (e *Executor) afterExecution(b *blocks.Block, stateDB *state.StateDB, r *ExecutionResults) error {
+func (e *Executor) afterExecution(b *blocks.Block, stateDB *state.StateDB, r *ExecutionResults, tracer Tracer, parentRoot common.Hash) error {
 	if err := e.hooks.AfterExecutingBlock(b.EthBlock(), r.Receipts); err != nil {
 		return fmt.Errorf("after-executing-block hook: %v", err)
 	}
@@ -438,6 +477,13 @@ func (e *Executor) afterExecution(b *blocks.Block, stateDB *state.StateDB, r *Ex
 	// Responsibility for untracking lies with the VM once it deems this block's
 	// post-execution state to no longer be consensus-critical.
 	e.Tracker.Track(root)
+
+	// Tracing MUST complete before the block is marked as executed so that a
+	// crash can't leave an executed block that was never exported; recovery
+	// re-executes every block since the last committed state.
+	if tracer != nil {
+		tracer.OnBlockEnd(b.EthBlock(), parentRoot, root)
+	}
 
 	// The strict ordering of the next 3 calls guarantees invariants that MUST
 	// NOT be broken:

@@ -105,6 +105,10 @@ type Config struct {
 
 	// Now defaults to [time.Now] if nil
 	Now func() time.Time `json:"-"`
+
+	// Tracer, if non-nil, observes canonical block execution. See
+	// [saexec.Tracer].
+	Tracer saexec.Tracer `json:"-"`
 }
 
 // NewVM returns a new [VM] that is ready for use immediately upon return.

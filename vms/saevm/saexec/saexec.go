@@ -51,6 +51,8 @@ type Executor struct {
 	db           ethdb.Database
 	xdb          saetypes.ExecutionResults
 	metrics      *metrics
+
+	tracer Tracer // MAY be nil
 }
 
 // New constructs and starts a new [Executor]. Call [Executor.Close] to stop it.
@@ -68,6 +70,7 @@ func New(
 	hooks hook.Points,
 	logger logging.Logger,
 	reg prometheus.Registerer,
+	opts ...ExecutorOption,
 ) (*Executor, error) {
 	m, err := newMetrics(reg, lastExecuted)
 	if err != nil {
@@ -94,6 +97,9 @@ func New(
 		xdb:         xdb,
 		metrics:     m,
 		receipts:    newSyncMap[common.Hash, eventual.Value[*Receipt]](),
+	}
+	for _, o := range opts {
+		o(e)
 	}
 	e.lastExecuted.Store(lastExecuted)
 

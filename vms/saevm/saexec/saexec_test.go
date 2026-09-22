@@ -87,6 +87,7 @@ type (
 		commitInterval uint64
 		dbScheme       string
 		extraAlloc     types.GenesisAlloc
+		executorOpts   []ExecutorOption
 	}
 	sutOption = options.Option[sutConfig]
 )
@@ -138,7 +139,7 @@ func newSUT(tb testing.TB, opts ...sutOption) (context.Context, *SUT) {
 
 	tr, err := saedb.NewTracker(db, saedbConfig, genesis.EthBlock().Root(), chainDataDir, logger)
 	require.NoError(tb, err, "saedb.NewTracker()")
-	e, err := New(genesis, src.AsHeaderSource(), config, db, xdb, tr, sutCfg.hooks, logger, prometheus.NewRegistry())
+	e, err := New(genesis, src.AsHeaderSource(), config, db, xdb, tr, sutCfg.hooks, logger, prometheus.NewRegistry(), sutCfg.executorOpts...)
 	require.NoError(tb, err, "New()")
 
 	closeOnce := sync.OnceValue(func() error {
@@ -171,6 +172,12 @@ func defaultHooks() *saehookstest.Stub {
 func withHooks(h *saehookstest.Stub) sutOption {
 	return options.Func[sutConfig](func(c *sutConfig) {
 		c.hooks = h
+	})
+}
+
+func withExecutorOptions(opts ...ExecutorOption) sutOption {
+	return options.Func[sutConfig](func(c *sutConfig) {
+		c.executorOpts = append(c.executorOpts, opts...)
 	})
 }
 
@@ -519,6 +526,11 @@ func TestExecuteRejectsInvalidOptions(t *testing.T) {
 			name:    "nil receipt store",
 			opts:    []Option{WithReceiptStore(nil)},
 			wantErr: errNilReceiptStore,
+		},
+		{
+			name:    "non-canonical tracing",
+			opts:    []Option{withTracer(&recordingTracer{})},
+			wantErr: errTracerNotCanonical,
 		},
 	}
 	for _, tt := range tests {

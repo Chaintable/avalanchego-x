@@ -10,6 +10,7 @@ go_library(
         "receipts.go",
         "saexec.go",
         "subscription.go",
+        "tracer.go",
     ],
     importpath = "github.com/ava-labs/avalanchego/vms/saevm/saexec",
     visibility = ["//visibility:public"],
@@ -42,7 +43,10 @@ go_library(
 
 go_test(
     name = "saexec_test",
-    srcs = ["saexec_test.go"],
+    srcs = [
+        "saexec_test.go",
+        "tracer_test.go",
+    ],
     data = glob(["testdata/**"]),
     embed = [":saexec"],
     deps = [
