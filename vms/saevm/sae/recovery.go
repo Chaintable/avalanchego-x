@@ -178,6 +178,7 @@ func recoverExecutor(
 		rec.hooks,
 		rec.snowCtx.Log,
 		reg,
+		saexec.WithTracer(rec.config.Tracer),
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("saexec.New(...): %v", err)

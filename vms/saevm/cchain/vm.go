@@ -197,6 +197,23 @@ func (vm *VM) Initialize(
 			return fmt.Errorf("setting up genesis trie: %w", err)
 		}
 
+		// The tracer MUST be initialized before [sae.NewVM], which re-executes
+		// all accepted blocks since the last committed state, and closed after
+		// the [sae.VM] is shut down.
+		if cfg := userConfig.VMTraceConfig; cfg != nil {
+			t, err := newPipelineTracer(snowCtx, *cfg, vm.chainConfig, ethDB)
+			if err != nil {
+				return fmt.Errorf("creating pipeline tracer: %w", err)
+			}
+			vm.onClose = append(vm.onClose, func(context.Context) error {
+				t.OnClose()
+				return nil
+			})
+			saeConfig.Tracer = t
+		} else {
+			snowCtx.Log.Info("pipeline tracing is disabled")
+		}
+
 		// Uses of [sae.VM] are NOT protected by [VM.closeMu]. However,
 		// [VM.activeHandler] ensures that methods accessing [sae.VM] only occur
 		// AFTER [vm.SetState] is called with [snow.Bootstrapping] or

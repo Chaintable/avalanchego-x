@@ -113,6 +113,7 @@ type config struct {
 
 	internalConfig
 	deprecatedConfig
+	pipelineConfig
 }
 
 // internalConfig holds undocumented, test-only options, kept out of config.md.
