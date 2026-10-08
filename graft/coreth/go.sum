@@ -9,6 +9,8 @@ github.com/BurntSushi/toml v1.5.0 h1:W5quZX/G/csjUnuI8SUYlsHs9M38FC7znL0lIO+DvMg
 github.com/BurntSushi/toml v1.5.0/go.mod h1:ukJfTF/6rtPPRCnwkur4qwRxa8vTRFBF0uk2lLoLwho=
 github.com/Chaintable/libevm v1.13.15-0.20260903154605-2eaf73af626c-debank-1 h1:BjymSeLHh/BfVoWqhxjWwBfBTLICaQOue8wq8ckFHkA=
 github.com/Chaintable/libevm v1.13.15-0.20260903154605-2eaf73af626c-debank-1/go.mod h1:6NxGoR1aLABnfLy+fncXRj0W6rUoUrXghnAWZ+Rhr4o=
+github.com/Chaintable/pipeline v0.0.59-avax-ct.5 h1:QazgBkKMHVflqs/0c1S+30cOsQLf221wSFt1c67HqyI=
+github.com/Chaintable/pipeline v0.0.59-avax-ct.5/go.mod h1:zF8CsKN7zFnljDeWgbbv4+Tw6GS+wMx8nz71E+oAlhs=
 github.com/Chaintable/pipeline v0.0.59-libevm-v1.13.15-debank-1 h1:SJRsikNMWXWIdTerqAPLd2PkTdN0G7c53zV8Z1ucAS8=
 github.com/Chaintable/pipeline v0.0.59-libevm-v1.13.15-debank-1/go.mod h1:zF8CsKN7zFnljDeWgbbv4+Tw6GS+wMx8nz71E+oAlhs=
 github.com/Chaintable/pipeline v0.0.59-libevm-v1.13.15-debank-3 h1:V5T8o94NW6FLlThua6J931uhvpuVsxOzRZrJ/X2hcbs=
