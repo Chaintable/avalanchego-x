@@ -13,6 +13,8 @@ github.com/Chaintable/pipeline v0.0.59-libevm-v1.13.15-debank-1 h1:SJRsikNMWXWId
 github.com/Chaintable/pipeline v0.0.59-libevm-v1.13.15-debank-1/go.mod h1:zF8CsKN7zFnljDeWgbbv4+Tw6GS+wMx8nz71E+oAlhs=
 github.com/Chaintable/pipeline v0.0.59-libevm-v1.13.15-debank-3 h1:V5T8o94NW6FLlThua6J931uhvpuVsxOzRZrJ/X2hcbs=
 github.com/Chaintable/pipeline v0.0.59-libevm-v1.13.15-debank-3/go.mod h1:zF8CsKN7zFnljDeWgbbv4+Tw6GS+wMx8nz71E+oAlhs=
+github.com/Chaintable/pipeline v0.0.59-libevm-v1.13.15-debank-3.0.20261008105656-88783b4b11e5 h1:Fvdv7KSfvxZVT5etlP+fTt6kIrF/HBSdW3Ro5IqE7IU=
+github.com/Chaintable/pipeline v0.0.59-libevm-v1.13.15-debank-3.0.20261008105656-88783b4b11e5/go.mod h1:zF8CsKN7zFnljDeWgbbv4+Tw6GS+wMx8nz71E+oAlhs=
 github.com/CloudyKit/fastprinter v0.0.0-20200109182630-33d98a066a53/go.mod h1:+3IMCy2vIlbG1XG/0ggNQv0SvxCAIpPM5b1nCz56Xno=
 github.com/CloudyKit/jet/v3 v3.0.0/go.mod h1:HKQPgSJmdK8hdoAbKUUWajkHyHo4RaU5rMdUywE7VMo=
 github.com/DataDog/zstd v1.5.2 h1:vUG4lAyuPCXO0TLbXvPv7EB7cNK1QV/luu55UHLrrn8=
