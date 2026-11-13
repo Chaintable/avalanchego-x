@@ -35,13 +35,10 @@ import (
 	"io"
 	"math/big"
 	"runtime"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	ptypes "github.com/Chaintable/pipeline/types"
 
 	"github.com/Chaintable/pipeline/tracer"
 	"github.com/Chaintable/pipeline/util"
@@ -1293,46 +1290,17 @@ func (bc *BlockChain) writeBlockAndSetHead(block *types.Block, parentRoot common
 	// setPreference is called. Otherwise, we consider it a side chain block.
 	if bc.newTip(block) {
 		bc.writeCanonicalBlockWithLogs(block, logs)
-		lastPushBlock := (*ptypes.BlockContext)(nil)
 		if tracer.NodeXPusher != nil {
-			lastPushBlock = tracer.NodeXPusher.LastPushedBlock()
-		}
-		// Only attempt to publish a block change notification once the pusher
-		// has a known last-pushed block (otherwise we have no ancestor to diff
-		// against, e.g. during early bootstrap before Kafka has any notices).
-		if tracer.NodeXPusher != nil && !tracer.NodeXPusher.IsBackup && lastPushBlock != nil && lastPushBlock.BlockNumber <= block.NumberU64() {
-			_, dropBlocks, newBlocks := bc.getCommonAncestor(*lastPushBlock, ptypes.BlockContext{
-				BlockNumber: block.NumberU64(),
-				Hash:        block.Hash(),
-				ParentHash:  block.ParentHash(),
-				Timestamp:   block.Time(),
-			})
-			var blockChange *ptypes.BlockChangeNotification
-			if len(dropBlocks) > 0 {
-				blockChange = &ptypes.BlockChangeNotification{
-					ChangeType: 2,
-					NewBlocks:  newBlocks,
-					DropBlocks: dropBlocks,
-				}
-			} else if len(newBlocks) > 0 {
-				blockChange = &ptypes.BlockChangeNotification{
-					ChangeType: 1,
-					NewBlocks:  newBlocks,
-				}
-			}
-
 			parent := bc.GetHeaderByHash(block.Header().ParentHash)
-
 			if parent.Root == block.Root() {
-				bc.hooks.OnCommit(parent.Root, block.Root(), nil, nil, nil, nil, nil, nil)
-			}
-
-			if blockChange != nil {
-				err := tracer.NodeXPusher.PushBlockChangeNotification(blockChange)
-				if err != nil {
-					log.Error("SetCanonical PushBlockChangeNotification error", "err", err)
+				if bc.hooks != nil && bc.hooks.OnCommit != nil {
+					bc.hooks.OnCommit(parent.Root, block.Root(), nil, nil, nil, nil, nil, nil)
 				}
-				log.Info("NodeXPusher PushBlockChangeNotification", "blockChange", blockChange)
+			}
+			// Pipeline owns the leader check, getCommonAncestor computation, and Kafka write gate.
+			// Backup nodes return immediately without any computation.
+			if err := tracer.NodeXPusher.NotifyBlockCommit(block, bc, nil); err != nil {
+				log.Error("SetCanonical NotifyBlockCommit error", "err", err)
 			}
 		}
 	} else {
@@ -2403,61 +2371,4 @@ func (bc *BlockChain) GetHeaderByHash2(blockHash common.Hash) *types.Header {
 		}
 	}
 	return header
-}
-
-func (bc *BlockChain) getCommonAncestor(blocka ptypes.BlockContext, blockb ptypes.BlockContext) (ptypes.BlockContext, []ptypes.BlockContext, []ptypes.BlockContext) {
-	var (
-		chainA, chainB []ptypes.BlockContext
-	)
-	if blockb.ParentHash == blocka.Hash {
-		return blocka, chainA, []ptypes.BlockContext{blockb}
-	}
-	for blockb.BlockNumber > blocka.BlockNumber {
-		chainB = append(chainB, blockb)
-		headerb := bc.GetHeaderByHash2(blockb.ParentHash)
-		if headerb == nil {
-			log.Crit("Failed to get header by hash", "hash", blockb.ParentHash)
-		} else {
-			blockb = ptypes.BlockContext{
-				BlockNumber: headerb.Number.Uint64(),
-				Hash:        headerb.Hash(),
-				ParentHash:  headerb.ParentHash,
-				Timestamp:   headerb.Time,
-			}
-		}
-	}
-	for blocka.Hash != blockb.Hash {
-		chainA = append(chainA, blocka)
-		headera := bc.GetHeaderByHash2(blocka.ParentHash)
-		if headera == nil {
-			log.Crit("Failed to get header by hash", "hash", blocka.ParentHash)
-		} else {
-			blocka = ptypes.BlockContext{
-				BlockNumber: headera.Number.Uint64(),
-				Hash:        headera.Hash(),
-				ParentHash:  headera.ParentHash,
-				Timestamp:   headera.Time,
-			}
-		}
-
-		chainB = append(chainB, blockb)
-		headerb := bc.GetHeaderByHash2(blockb.ParentHash)
-		if headerb == nil {
-			log.Crit("Failed to get header by hash", "hash", blockb.ParentHash)
-		} else {
-			blockb = ptypes.BlockContext{
-				BlockNumber: headerb.Number.Uint64(),
-				Hash:        headerb.Hash(),
-				ParentHash:  headerb.ParentHash,
-				Timestamp:   headerb.Time,
-			}
-		}
-	}
-	// now blocka == blockb == ancestor
-
-	// reverse chainA
-	slices.Reverse(chainA)
-	// reverse chainB
-	slices.Reverse(chainB)
-	return blocka, chainA, chainB
 }
