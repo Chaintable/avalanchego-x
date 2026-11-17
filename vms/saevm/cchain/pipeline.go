@@ -7,8 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-	"slices"
 
+	"github.com/Chaintable/pipeline/processor"
 	"github.com/Chaintable/pipeline/tracer"
 	"github.com/Chaintable/pipeline/util"
 	"github.com/ava-labs/libevm/common"
@@ -100,7 +100,7 @@ func newPipelineTracer(
 		last = *b
 	}
 	snowCtx.Log.Info("pipeline tracer enabled",
-		zap.Bool("backup", cfg.IsBackup),
+		zap.Boolp("backup", cfg.IsBackup),
 		zap.String("topic", cfg.Topic),
 		zap.Any("lastPushed", last),
 	)
@@ -156,8 +156,9 @@ func (t *pipelineTracer) OnCommit(
 }
 
 // OnBlockEnd uploads the block's files if the state root didn't change (so
-// [pipelineTracer.OnCommit] wasn't called), then pushes the block change
-// notification to Kafka.
+// [pipelineTracer.OnCommit] wasn't called), then notifies the pipeline of the
+// block, which pushes the block change notification to Kafka if this node is
+// the leader.
 func (t *pipelineTracer) OnBlockEnd(b *types.Block, parentRoot, root common.Hash) {
 	ctx := tracer.BlockCtx
 	ctx.BlockHeader.StateRoot = root
@@ -168,69 +169,24 @@ func (t *pipelineTracer) OnBlockEnd(b *types.Block, parentRoot, root common.Hash
 			zap.Stringer("root", root),
 		)
 	}
+	t.PipelineTracer.OnBlockEnd(nil)
 
-	change, err := t.blockChange(b)
-	if err != nil {
+	// The pipeline owns the leader check, the common ancestor computation and
+	// the Kafka write gate; backup nodes return immediately. Accepted SAE
+	// blocks are final but coreth pushed preferred blocks before acceptance, so
+	// the last pushed block MAY be on a different branch.
+	r := &pipelineHeaderReader{t: t}
+	if last := t.lastPushed(); last != nil {
+		r.lastPushed = last.Hash
+	}
+	if err := tracer.NodeXPusher.NotifyBlockCommit(b, r, nil); err != nil {
 		// The notification is retried with the next block because the last
 		// pushed block is unchanged.
-		t.log.Error("building pipeline block change notification",
+		t.log.Error("pushing pipeline block change notification",
 			zap.Uint64("height", b.NumberU64()),
 			zap.Stringer("hash", b.Hash()),
 			zap.Error(err),
 		)
-	}
-	ctx.BlockChange = change
-	t.PipelineTracer.OnBlockEnd(nil)
-}
-
-// blockChange returns the notification that advances the last pushed block to
-// b, or nil if there is nothing to push. Accepted SAE blocks are final but
-// coreth pushed preferred blocks before acceptance, so the last pushed block
-// MAY be on a different branch.
-func (t *pipelineTracer) blockChange(b *types.Block) (*ptypes.BlockChangeNotification, error) {
-	if tracer.NodeXPusher == nil || tracer.NodeXPusher.IsBackup {
-		return nil, nil
-	}
-	last := t.lastPushed()
-	if last == nil {
-		// Without a known ancestor there's nothing to diff against, as in
-		// coreth.
-		t.log.Warn("no block change notification in Kafka; not pushing",
-			zap.Uint64("height", b.NumberU64()),
-		)
-		return nil, nil
-	}
-	if last.BlockNumber > b.NumberU64() {
-		return nil, nil
-	}
-
-	drop, add, err := t.commonAncestor(*last, blockContext(b.Header()))
-	if err != nil {
-		return nil, err
-	}
-	// Blocks other than b are normally only included if pushing them failed,
-	// in which case they were uploaded. They weren't if they were executed
-	// without tracing, and consumers MUST NOT be notified of such blocks.
-	for _, c := range add[:max(len(add), 1)-1] {
-		if _, err := t.uploaded(c.Hash); err != nil {
-			return nil, fmt.Errorf("%w: block %d (%v) was never exported; the node MUST be resynced from the state of block %d: %v",
-				errUntracedBlock, c.BlockNumber, c.Hash, c.BlockNumber-1, err)
-		}
-	}
-	switch {
-	case len(drop) > 0:
-		return &ptypes.BlockChangeNotification{
-			ChangeType: 2,
-			NewBlocks:  add,
-			DropBlocks: drop,
-		}, nil
-	case len(add) > 0:
-		return &ptypes.BlockChangeNotification{
-			ChangeType: 1,
-			NewBlocks:  add,
-		}, nil
-	default:
-		return nil, nil
 	}
 }
 
@@ -243,57 +199,57 @@ func blockContext(h *types.Header) ptypes.BlockContext {
 	}
 }
 
-// commonAncestor returns the blocks to drop from, and to add to, the branch
-// ending at a to reach the branch ending at b, both in ascending height order.
-// It is a port of coreth's BlockChain.getCommonAncestor.
-func (t *pipelineTracer) commonAncestor(a, b ptypes.BlockContext) (drop, add []ptypes.BlockContext, _ error) {
-	if b.ParentHash == a.Hash {
-		return nil, []ptypes.BlockContext{b}, nil
-	}
+// pipelineHeaderReader provides the pipeline with the ancestry of the blocks
+// it notifies consumers of.
+type pipelineHeaderReader struct {
+	t *pipelineTracer
+	// lastPushed is the hash of the last pushed block, if any, read before
+	// notifying the pipeline. It is exempt from the export check because the
+	// pipeline already notified consumers of it.
+	lastPushed common.Hash
+}
 
-	parent := func(c ptypes.BlockContext) (ptypes.BlockContext, error) {
-		return t.blockContextByHash(c.ParentHash)
+var _ processor.BlockContextReader = (*pipelineHeaderReader)(nil)
+
+// GetHeaderByHash2 implements [processor.BlockChainReader] with the headers in
+// the database. The pipeline uses [pipelineHeaderReader.GetBlockContextByHash]
+// instead.
+func (r *pipelineHeaderReader) GetHeaderByHash2(hash common.Hash) *types.Header {
+	if num := rawdb.ReadHeaderNumber(r.t.db, hash); num != nil {
+		return rawdb.ReadHeader(r.t.db, hash, *num)
 	}
-	var err error
-	for b.BlockNumber > a.BlockNumber {
-		add = append(add, b)
-		if b, err = parent(b); err != nil {
-			return nil, nil, err
-		}
+	return nil
+}
+
+// GetBlockContextByHash reads the header from the database, falling back to
+// the header uploaded to S3, as does coreth's BlockChain.GetHeaderByHash2. The
+// S3 header is not decoded as a [types.Header] because its hash is not
+// necessarily reproducible from its fields; see [pipelineTracer].
+//
+// The pipeline only reads the ancestry of a block down to the common ancestor
+// with the last pushed block, all of which consumers were or are about to be
+// notified of, so it MUST have been exported. Blocks executed without tracing
+// weren't.
+func (r *pipelineHeaderReader) GetBlockContextByHash(hash common.Hash) (ptypes.BlockContext, error) {
+	h := r.GetHeaderByHash2(hash)
+	if h == nil {
+		return r.t.uploaded(hash)
 	}
-	for a.Hash != b.Hash {
-		drop = append(drop, a)
-		if a, err = parent(a); err != nil {
-			return nil, nil, err
-		}
-		add = append(add, b)
-		if b, err = parent(b); err != nil {
-			return nil, nil, err
-		}
+	c := blockContext(h)
+	if hash == r.lastPushed {
+		return c, nil
 	}
-	slices.Reverse(drop)
-	slices.Reverse(add)
-	return drop, add, nil
+	if _, err := r.t.uploaded(hash); err != nil {
+		return ptypes.BlockContext{}, fmt.Errorf("%w: block %d (%v) was never exported; the node MUST be resynced from the state of block %d: %v",
+			errUntracedBlock, c.BlockNumber, c.Hash, c.BlockNumber-1, err)
+	}
+	return c, nil
 }
 
 var (
 	errHeaderNotFound = errors.New("header not found")
 	errUntracedBlock  = errors.New("untraced block")
 )
-
-// blockContextByHash reads the header from the database, falling back to the
-// header uploaded to S3, as does coreth's BlockChain.GetHeaderByHash2. The S3
-// header is not decoded as a [types.Header] because its hash is not
-// necessarily reproducible from its fields; see [pipelineTracer].
-func (t *pipelineTracer) blockContextByHash(hash common.Hash) (ptypes.BlockContext, error) {
-	if num := rawdb.ReadHeaderNumber(t.db, hash); num != nil {
-		if h := rawdb.ReadHeader(t.db, hash, *num); h != nil {
-			return blockContext(h), nil
-		}
-	}
-
-	return t.uploaded(hash)
-}
 
 func (t *pipelineTracer) uploaded(hash common.Hash) (ptypes.BlockContext, error) {
 	if t.uploadedHeader != nil {

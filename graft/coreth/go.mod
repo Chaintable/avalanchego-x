@@ -8,7 +8,7 @@ module github.com/ava-labs/avalanchego/graft/coreth
 go 1.25.10
 
 require (
-	github.com/Chaintable/pipeline v0.0.59-avax-ct.5
+	github.com/Chaintable/pipeline v0.0.59-libevm-v1.13.15-debank-3.0.20261116144707-bc03a4f29f64
 	github.com/ava-labs/avalanchego v1.15.0
 	github.com/ava-labs/avalanchego/graft/evm v1.15.0
 	github.com/ava-labs/firewood-go-ethhash/ffi v0.8.0
@@ -77,6 +77,8 @@ require (
 	github.com/cockroachdb/redact v1.1.3 // indirect
 	github.com/cockroachdb/tokenbucket v0.0.0-20230807174530-cc333fc44b06 // indirect
 	github.com/consensys/gnark-crypto v0.18.1 // indirect
+	github.com/coreos/go-semver v0.3.0 // indirect
+	github.com/coreos/go-systemd/v22 v22.3.2 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.6 // indirect
 	github.com/crate-crypto/go-ipa v0.0.0-20240724233137-53bbb0ceb27a // indirect
 	github.com/crate-crypto/go-kzg-4844 v1.1.0 // indirect
@@ -161,6 +163,9 @@ require (
 	github.com/tklauser/numcpus v0.10.0 // indirect
 	github.com/xrash/smetrics v0.0.0-20201216005158-039620a65673 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
+	go.etcd.io/etcd/api/v3 v3.5.10 // indirect
+	go.etcd.io/etcd/client/pkg/v3 v3.5.10 // indirect
+	go.etcd.io/etcd/client/v3 v3.5.10 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel v1.44.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.43.0 // indirect
